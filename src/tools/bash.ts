@@ -113,6 +113,27 @@ function isPathSafe(absPath: string, workspaceRoot: string): boolean {
 }
 
 /**
+ * Rewrite absolute paths that aren't within the workspace or known safe locations
+ * to be relative paths (strip the leading /). Small models often output "/subdir"
+ * when they mean "subdir" relative to the workspace.
+ */
+export function fixAbsolutePaths(command: string, workspaceRoot: string): string {
+  const writeCommands = /\b(?:mkdir|touch|cp|mv|rm|rmdir|ln|cat\s*>|tee|install)\b/;
+  if (!writeCommands.test(command)) return command;
+
+  const absPaths = extractAbsolutePaths(command);
+  let fixed = command;
+  for (const p of absPaths) {
+    if (!isPathSafe(p, workspaceRoot)) {
+      // Strip leading / to make it relative to workspace
+      const relative = p.replace(/^\//, "");
+      fixed = fixed.replace(p, relative);
+    }
+  }
+  return fixed;
+}
+
+/**
  * Validate a command before execution. Returns null if safe, or an error message if blocked.
  */
 export function validateCommand(command: string, workspaceRoot: string): string | null {
@@ -120,17 +141,6 @@ export function validateCommand(command: string, workspaceRoot: string): string 
   for (const [pattern, reason] of BLOCKED_PATTERNS) {
     if (pattern.test(command)) {
       return `BLOCKED: ${reason}.\nCommand: ${command}`;
-    }
-  }
-
-  // Check for absolute paths outside workspace (only for write-like commands)
-  const writeCommands = /\b(?:mkdir|touch|cp|mv|rm|rmdir|ln|cat\s*>|tee|install)\b/;
-  if (writeCommands.test(command)) {
-    const absPaths = extractAbsolutePaths(command);
-    for (const p of absPaths) {
-      if (!isPathSafe(p, workspaceRoot)) {
-        return `BLOCKED: Command references path "${p}" outside the workspace (${workspaceRoot}). Use a relative path or a path within your workspace instead.\nCommand: ${command}`;
-      }
     }
   }
 
@@ -164,8 +174,11 @@ export class BashTool extends BaseTool<BashInput> {
   }
 
   async execute(input: BashInput): Promise<ToolResult> {
+    // Fix absolute paths that should be relative to workspace
+    const command = fixAbsolutePaths(input.command, this.workspaceRoot);
+
     // Pre-validate the command before execution
-    const violation = validateCommand(input.command, this.workspaceRoot);
+    const violation = validateCommand(command, this.workspaceRoot);
     if (violation) {
       return { output: violation };
     }
@@ -179,7 +192,7 @@ export class BashTool extends BaseTool<BashInput> {
       let truncated = false;
       let timedOut = false;
 
-      const proc = spawn(shell, ["-c", input.command], {
+      const proc = spawn(shell, ["-c", command], {
         cwd,
         stdio: ["ignore", "pipe", "pipe"],
         env: {
@@ -221,7 +234,7 @@ export class BashTool extends BaseTool<BashInput> {
         clearTimeout(timer);
         this.activeProcesses.delete(proc);
 
-        let result = `$ ${input.command}\n\n${output}`;
+        let result = `$ ${command}\n\n${output}`;
         if (truncated) {
           result += "\n... (output truncated)";
         }
