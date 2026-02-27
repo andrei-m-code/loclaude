@@ -31,11 +31,6 @@ export class TerminalUI {
   private statusText = "";
   private running = false;
 
-  // Status bar spinner
-  private spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
-  private spinnerIdx = 0;
-  private spinnerTimer: ReturnType<typeof setInterval> | null = null;
-
   // Inline spinner (in scroll region, where text will appear)
   private inlineSpinnerTimer: ReturnType<typeof setInterval> | null = null;
   private inlineSpinnerIdx = 0;
@@ -106,32 +101,19 @@ export class TerminalUI {
     this.write(text + "\n");
   }
 
-  /** Show an animated spinner with the given status text. */
-  startSpinner(text: string): void {
-    this.statusText = text;
-    this.spinnerIdx = 0;
-    this.drawStatusLine();
-    this.stopSpinner();
-    // Hide cursor during spinner animation
+  /** No-op kept for API compatibility. Status line always shows persistent info. */
+  startSpinner(_text: string): void {
+    // Hide cursor while agent is working
     this.raw(`${ESC}[?25l`);
-    this.spinnerTimer = setInterval(() => {
-      this.spinnerIdx = (this.spinnerIdx + 1) % this.spinnerFrames.length;
-      this.drawStatusLine();
-    }, 80);
   }
 
-  /** Stop the spinner animation but keep the status text visible. */
+  /** No-op kept for API compatibility. */
   stopSpinner(): void {
-    if (this.spinnerTimer) {
-      clearInterval(this.spinnerTimer);
-      this.spinnerTimer = null;
-      // Show cursor again
-      this.raw(`${ESC}[?25h`);
-    }
-    this.drawStatusLine();
+    // Show cursor again
+    this.raw(`${ESC}[?25h`);
   }
 
-  /** Update spinner text without resetting animation. */
+  /** Update the persistent status line (model, directory, tokens). */
   setStatus(text: string): void {
     this.statusText = text;
     this.drawStatusLine();
@@ -281,12 +263,7 @@ export class TerminalUI {
     const row = this.rows;
     this.raw(`${ESC}[${row};1H${ESC}[2K`);
     if (this.statusText) {
-      if (this.spinnerTimer) {
-        const frame = this.spinnerFrames[this.spinnerIdx];
-        this.raw(chalk.yellow(` ${frame} ${this.statusText}`));
-      } else {
-        this.raw(chalk.dim(`  ${this.statusText}`));
-      }
+      this.raw(chalk.dim(`  ${this.statusText}`));
     }
   }
 
