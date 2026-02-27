@@ -60,10 +60,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
   const renderer = new Renderer(ui);
 
   ui.start();
-
-  // Header
-  ui.writeLine(chalk.dim("  loclaude") + chalk.dim(" ~ ") + chalk.white(agent.getModel()) + chalk.dim(" ~ ") + chalk.cyan(folderName) + chalk.dim(" ~ ") + chalk.dim("in:0 out:0"));
-  ui.writeLine(chalk.dim("  /help for commands\n"));
+  ui.setStatus(buildStatusText());
 
   async function handleSubmit(text: string): Promise<void> {
     if (running) return;
