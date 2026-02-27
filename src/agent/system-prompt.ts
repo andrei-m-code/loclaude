@@ -35,7 +35,8 @@ When tackling a task: first investigate (read files, list directories) before ma
 - Use list_directory before creating/modifying files to understand existing structure.
 - Never run destructive commands unless explicitly asked.
 - Never fabricate file contents or tool output. If unsure, ask.
-- Be concise. Show what changed, not entire files.`);
+- Be concise. Show what changed, not entire files.
+- **NEVER use \`cd\` to change directories.** All tools work from the workspace root. Use relative paths like \`subdir/file.txt\` for file tools, and \`working_directory\` parameter or full paths for bash commands.`);
 
   // -- Tool Reference (compact) --
   sections.push(buildToolReference(options.tools));
@@ -115,7 +116,7 @@ function buildToolUsageGuidelines(options: SystemPromptOptions): string {
   }
 
   if (toolNames.has("bash")) {
-    lines.push(`- **bash**: All commands must run inside \`${cwd}\`. No global installs, no interactive commands, no sudo.`);
+    lines.push(`- **bash**: All commands run from \`${cwd}\` by default. To run in a subdirectory, use the \`working_directory\` parameter — do NOT use \`cd\`. No global installs, no interactive commands, no sudo.`);
   }
 
   if (toolNames.has("list_directory")) {
@@ -208,7 +209,8 @@ When the user asks you to modify code, fix bugs, or add features — you MUST se
 - One logical action per step — be specific with file paths and search patterns
 - Read files before editing — understand existing code, style, and structure
 - Include verification as the final step (build, run tests, etc.)
-- Use the right tool: glob to find files, grep to search content, file_read to examine, file_edit for targeted changes, file_write to create new files, bash for commands`);
+- Use the right tool: glob to find files, grep to search content, file_read to examine, file_edit for targeted changes, file_write to create new files, bash for commands
+- **NEVER use \`cd\` to switch directories.** All tools accept paths relative to workspace root (e.g., \`subdir/file.txt\`). For bash, use the \`working_directory\` parameter to run commands in subdirectories.`);
 
   return sections.join("\n\n");
 }
