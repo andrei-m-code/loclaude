@@ -122,6 +122,41 @@ export class Agent {
       }
     }
 
+    // Fallback models may skip the plan and emit <tool_call> tags directly.
+    // Detect this and handle it: parse the tool calls, execute them, and
+    // continue with the normal tool loop instead of plan→execute→verify.
+    if (isFallback) {
+      const parsed = parseFallbackToolCalls(planText);
+      if (parsed.toolCalls.length > 0) {
+        yield { type: "text_done", fullText: parsed.text };
+
+        // Add assistant message with tool calls to conversation
+        this.conversation.addAssistantMessage(parsed.text, parsed.toolCalls);
+
+        for (const err of parsed.errors) {
+          yield { type: "warning", message: err };
+        }
+
+        // Execute the tool calls
+        const toolResults: Array<{ toolName: string; result: string; isError: boolean }> = [];
+        for (const tc of parsed.toolCalls) {
+          yield { type: "tool_call_ready", toolName: tc.toolName, toolCallId: tc.toolCallId, args: tc.arguments };
+          const { result, isError } = await this.executeTool(tc);
+          yield { type: "tool_result", toolCallId: tc.toolCallId, toolName: tc.toolName, result, isError };
+          toolResults.push({ toolName: tc.toolName, result, isError });
+        }
+
+        // Add results as user message (fallback mode uses role:user for results)
+        const resultContent = buildFallbackToolResultMessage(toolResults);
+        this.conversation.addUserMessage(resultContent);
+
+        // Continue with tool loop for follow-up
+        yield* this.runToolLoop(isFallback);
+        yield { type: "loop_complete", totalTurns: 1 };
+        return;
+      }
+    }
+
     yield { type: "text_done", fullText: planText };
     this.conversation.addAssistantMessage(planText);
 
