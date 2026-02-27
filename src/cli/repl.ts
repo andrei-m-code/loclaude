@@ -10,10 +10,18 @@ interface ReplOptions {
   modelName: string;
 }
 
+function formatTokens(n: number): string {
+  if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(1)}M`;
+  if (n >= 1_000) return `${(n / 1_000).toFixed(1)}k`;
+  return String(n);
+}
+
 export async function startRepl(options: ReplOptions): Promise<never> {
   const { agent, providerName } = options;
 
   let running = false;
+  let totalIn = 0;
+  let totalOut = 0;
 
   const ui = new TerminalUI({
     onSubmit: (text) => {
@@ -44,10 +52,9 @@ export async function startRepl(options: ReplOptions): Promise<never> {
 
   ui.start();
 
-  // Banner
-  ui.writeLine(chalk.bold.cyan("  ollama-claude v0.1.0"));
-  ui.writeLine(chalk.cyan(`  Provider: ${providerName} | Model: ${agent.getModel()}`));
-  ui.writeLine(chalk.dim("  Type /help for commands\n"));
+  // Header
+  ui.writeLine(chalk.dim("  loclaude") + chalk.dim(" ~ ") + chalk.white(agent.getModel()) + chalk.dim(" ~ ") + chalk.dim("in:0 out:0"));
+  ui.writeLine(chalk.dim("  /help for commands\n"));
 
   async function handleSubmit(text: string): Promise<void> {
     if (running) return;
@@ -156,6 +163,12 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             ui.startInlineSpinner();
             break;
 
+          case "usage":
+            totalIn += event.promptTokens;
+            totalOut += event.completionTokens;
+            ui.setStatus(`${agent.getModel()} | in:${formatTokens(totalIn)} out:${formatTokens(totalOut)}`);
+            break;
+
           case "turn_complete":
             break;
 
@@ -186,6 +199,10 @@ export async function startRepl(options: ReplOptions): Promise<never> {
     }
     ui.writeLine(""); // blank line after response
     ui.stopSpinner();
+    // Restore persistent status with token counts
+    if (totalIn > 0 || totalOut > 0) {
+      ui.setStatus(`${agent.getModel()} | in:${formatTokens(totalIn)} out:${formatTokens(totalOut)}`);
+    }
     ui.setRunning(false);
     running = false;
   }
@@ -227,7 +244,7 @@ async function handleSlashCommand(
       break;
 
     case "/tools":
-      ui.writeLine(chalk.dim("Tools: file_read, bash"));
+      ui.writeLine(chalk.dim(`Tools: ${agent.getToolNames().join(", ")}`));
       break;
 
     case "/exit":

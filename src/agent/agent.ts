@@ -47,7 +47,8 @@ export type AgentEvent =
   | { type: "plan_ready"; plan: ExecutionPlan }
   | { type: "step_start"; stepNumber: number; totalSteps: number; description: string; tool: string }
   | { type: "step_end"; stepNumber: number; success: boolean }
-  | { type: "verify_result"; result: VerificationResult };
+  | { type: "verify_result"; result: VerificationResult }
+  | { type: "usage"; promptTokens: number; completionTokens: number; totalTokens: number };
 
 // -- Agent Config --
 
@@ -203,6 +204,10 @@ export class Agent {
 
   getHistory() {
     return this.conversation.getHistory();
+  }
+
+  getToolNames(): string[] {
+    return this.toolRegistry.getToolNames();
   }
 
   // -- Private: Phase Implementations --
@@ -608,6 +613,14 @@ export class Agent {
         break;
 
       case "done":
+        if (chunk.usage) {
+          events.push({
+            type: "usage",
+            promptTokens: chunk.usage.promptTokens,
+            completionTokens: chunk.usage.completionTokens,
+            totalTokens: chunk.usage.totalTokens,
+          });
+        }
         break;
     }
 

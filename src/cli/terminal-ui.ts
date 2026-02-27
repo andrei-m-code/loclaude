@@ -240,8 +240,12 @@ export class TerminalUI {
     const row = this.rows - 3;
     this.raw(`${ESC}[${row};1H${ESC}[2K`);
     if (this.statusText) {
-      const frame = this.spinnerTimer ? this.spinnerFrames[this.spinnerIdx] : "●";
-      this.raw(chalk.yellow(` ${frame} ${this.statusText}`));
+      if (this.spinnerTimer) {
+        const frame = this.spinnerFrames[this.spinnerIdx];
+        this.raw(chalk.yellow(` ${frame} ${this.statusText}`));
+      } else {
+        this.raw(chalk.dim(`  ${this.statusText}`));
+      }
     }
   }
 
