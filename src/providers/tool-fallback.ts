@@ -11,41 +11,69 @@ export interface ParsedFallbackResponse {
  * References tool names from the system prompt — no duplicate schemas.
  */
 export function buildFallbackToolPrompt(tools: ToolDefinition[]): string {
-  const toolNames = tools.map((t) => t.name).join(", ");
+  // Build per-tool parameter reference so the model knows exact param names
+  const toolRef = tools.map(t => {
+    const params = t.parameters as {
+      properties?: Record<string, { type?: string; description?: string }>;
+      required?: string[];
+    };
+    const paramList = params.properties
+      ? Object.entries(params.properties).map(([k, v]) => `${k}: ${v.type ?? "string"}`).join(", ")
+      : "";
+    return `- **${t.name}**(${paramList}): ${t.description}`;
+  }).join("\n");
 
-  return `## Tool Calling
+  return `## How to Call Tools
 
-To use a tool, output a <tool_call> block with JSON:
+**YOU MUST USE THIS EXACT FORMAT to call tools. Do NOT use any other format.**
 
 <tool_call>
-{"name": "tool_name", "arguments": {"param1": "value1"}}
+{"name": "TOOL_NAME", "arguments": {"param": "value"}}
 </tool_call>
 
-Available tools: ${toolNames}
-(See tool descriptions above for parameters.)
+This is the ONLY way to call tools. Do NOT put tool calls in code blocks. Do NOT write JSON without the <tool_call> tags.
 
-Rules:
-- Valid JSON on a single line inside <tool_call> tags.
-- You may call multiple tools using multiple <tool_call> blocks.
-- After tool calls, STOP. Wait for results before continuing.
-- Never fabricate tool results.
+## Available Tools
 
-Examples:
+${toolRef}
+
+## Examples
 
 User: "Read src/index.ts"
+
 <tool_call>
 {"name": "file_read", "arguments": {"file_path": "src/index.ts"}}
 </tool_call>
 
-User: "List all TypeScript files"
+User: "Create a hello.py file"
+
 <tool_call>
-{"name": "bash", "arguments": {"command": "find . -name '*.ts' -type f"}}
+{"name": "file_write", "arguments": {"file_path": "hello.py", "content": "print('hello world')\\n"}}
 </tool_call>
 
-User: "Find where getUserById is defined"
+User: "Run the tests"
+
 <tool_call>
-{"name": "grep", "arguments": {"pattern": "function getUserById", "path": "src"}}
-</tool_call>`;
+{"name": "bash", "arguments": {"command": "npm test"}}
+</tool_call>
+
+User: "Find all Python files"
+
+<tool_call>
+{"name": "glob", "arguments": {"pattern": "**/*.py"}}
+</tool_call>
+
+User: "Search for the login function"
+
+<tool_call>
+{"name": "grep", "arguments": {"pattern": "function login", "path": "src"}}
+</tool_call>
+
+## Rules
+- Always wrap tool calls in <tool_call> and </tool_call> tags
+- JSON must have "name" (string) and "arguments" (object) fields
+- After calling tools, STOP and wait for results
+- Never fabricate tool results — wait for the actual output`;
 }
 
 /**
@@ -115,9 +143,21 @@ export function parseFallbackToolCalls(response: string): ParsedFallbackResponse
   if (!anyMatched) {
     const funcResult = parseFunctionTagCalls(response);
     if (funcResult.toolCalls.length > 0) {
+      anyMatched = true;
       toolCalls.push(...funcResult.toolCalls);
       errors.push(...funcResult.errors);
       cleanedResponse = funcResult.text;
+    }
+  }
+
+  // If still no matches, try JSON tool calls in markdown code blocks
+  // e.g.: ```json\n{"name": "file_read", "arguments": {...}}\n```
+  if (!anyMatched) {
+    const codeBlockResult = parseCodeBlockToolCalls(response);
+    if (codeBlockResult.toolCalls.length > 0) {
+      toolCalls.push(...codeBlockResult.toolCalls);
+      errors.push(...codeBlockResult.errors);
+      cleanedResponse = codeBlockResult.text;
     }
   }
 
@@ -245,6 +285,61 @@ function parseFunctionTagCalls(response: string): ParsedFallbackResponse {
   const text = response.replace(funcRegex, "").trim();
 
   return { text, toolCalls, errors };
+}
+
+/**
+ * Parse tool calls from markdown code blocks (```json ... ```).
+ * Some models output tool calls as JSON in code fences instead of <tool_call> tags.
+ */
+function parseCodeBlockToolCalls(response: string): ParsedFallbackResponse {
+  const toolCalls: ToolCallContent[] = [];
+  const errors: string[] = [];
+  let callIndex = 0;
+
+  // Match ```json ... ``` or ``` ... ``` blocks containing JSON with "name" field
+  const codeBlockRegex = /```(?:json)?\s*\n?([\s\S]*?)\n?```/gi;
+  let match: RegExpExecArray | null;
+  let cleanedResponse = response;
+
+  while ((match = codeBlockRegex.exec(response)) !== null) {
+    const rawJson = match[1].trim();
+
+    // Only try to parse if it looks like a tool call (has "name" field)
+    if (!/"name"\s*:/.test(rawJson)) continue;
+
+    let parsed = tryParseToolCallJson(rawJson);
+
+    if (!parsed) {
+      parsed = extractFieldsIndependently(rawJson);
+    }
+
+    if (!parsed) {
+      errors.push(`Code block tool call #${callIndex}: could not parse JSON`);
+      callIndex++;
+      continue;
+    }
+
+    if (!parsed.name || typeof parsed.name !== "string") {
+      callIndex++;
+      continue;
+    }
+
+    toolCalls.push({
+      type: "tool_call",
+      toolCallId: `fallback_call_${Date.now()}_${callIndex}`,
+      toolName: parsed.name,
+      arguments: parsed.arguments ?? {},
+    });
+
+    callIndex++;
+  }
+
+  // Remove matched code blocks from text
+  if (toolCalls.length > 0) {
+    cleanedResponse = response.replace(codeBlockRegex, "").trim();
+  }
+
+  return { text: cleanedResponse, toolCalls, errors };
 }
 
 /**
