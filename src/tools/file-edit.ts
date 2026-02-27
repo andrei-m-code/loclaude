@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { BaseTool, type ToolResult } from "./types.js";
+import { validateWorkspacePath } from "./workspace-scope.js";
 
 const inputSchema = z.object({
   file_path: z.string().describe("Absolute path to the file to edit"),
@@ -86,12 +87,23 @@ export class FileEditTool extends BaseTool<FileEditInput> {
     "Make targeted edits to a file using exact string replacement. Safer than rewriting entire files. The old_string must match exactly (including whitespace and indentation).";
   readonly inputSchema = inputSchema;
 
+  private workspaceRoot: string;
+
+  constructor(workspaceRoot?: string) {
+    super();
+    this.workspaceRoot = workspaceRoot ?? process.cwd();
+  }
+
   async execute(input: FileEditInput): Promise<ToolResult> {
     const filePath = path.resolve(input.file_path);
 
     if (!path.isAbsolute(input.file_path)) {
       return { output: `Error: file_path must be an absolute path, got: ${input.file_path}` };
     }
+
+    // Workspace scope check
+    const scopeError = validateWorkspacePath(filePath, this.workspaceRoot);
+    if (scopeError) return { output: scopeError };
 
     if (input.old_string === input.new_string) {
       return { output: "Error: old_string and new_string are identical — no edit to make" };

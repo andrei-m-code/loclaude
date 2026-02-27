@@ -26,14 +26,15 @@ async function main() {
   });
 
   // 3. Create tool registry
+  const cwd = process.cwd();
   const toolRegistry = new ToolRegistry();
-  toolRegistry.register(new FileReadTool());
-  toolRegistry.register(new FileWriteTool());
-  toolRegistry.register(new FileEditTool());
-  toolRegistry.register(new FileDeleteTool());
+  toolRegistry.register(new FileReadTool(cwd));
+  toolRegistry.register(new FileWriteTool(cwd));
+  toolRegistry.register(new FileEditTool(cwd));
+  toolRegistry.register(new FileDeleteTool(cwd));
   toolRegistry.register(new GlobTool());
   toolRegistry.register(new GrepTool());
-  toolRegistry.register(new BashTool(process.cwd()));
+  toolRegistry.register(new BashTool(cwd));
   toolRegistry.register(new HttpRequestTool());
 
   // 4. Build system prompt

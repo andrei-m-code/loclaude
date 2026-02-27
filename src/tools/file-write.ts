@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { BaseTool, type ToolResult } from "./types.js";
+import { validateWorkspacePath } from "./workspace-scope.js";
 
 const MAX_SIZE = 1024 * 1024; // 1MB
 
@@ -16,8 +17,15 @@ type FileWriteInput = z.infer<typeof inputSchema>;
 export class FileWriteTool extends BaseTool<FileWriteInput> {
   readonly name = "file_write";
   readonly description =
-    "Create or overwrite a file with the given content. The file_path must be an absolute path. Parent directories are created automatically.";
+    "Create or overwrite a file with the given content. The file_path must be an absolute path within the workspace. Parent directories are created automatically.";
   readonly inputSchema = inputSchema;
+
+  private workspaceRoot: string;
+
+  constructor(workspaceRoot?: string) {
+    super();
+    this.workspaceRoot = workspaceRoot ?? process.cwd();
+  }
 
   async execute(input: FileWriteInput): Promise<ToolResult> {
     const filePath = path.resolve(input.file_path);
@@ -26,6 +34,10 @@ export class FileWriteTool extends BaseTool<FileWriteInput> {
     if (!path.isAbsolute(input.file_path)) {
       return { output: `Error: file_path must be an absolute path, got: ${input.file_path}` };
     }
+
+    // Workspace scope check
+    const scopeError = validateWorkspacePath(filePath, this.workspaceRoot);
+    if (scopeError) return { output: scopeError };
 
     // Size limit
     const byteSize = Buffer.byteLength(input.content, "utf-8");

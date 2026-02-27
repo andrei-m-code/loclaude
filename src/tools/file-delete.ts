@@ -3,6 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { BaseTool, type ToolResult } from "./types.js";
+import { validateWorkspacePath } from "./workspace-scope.js";
 
 const PROTECTED_PATHS = new Set([
   "/",
@@ -30,8 +31,15 @@ type FileDeleteInput = z.infer<typeof inputSchema>;
 export class FileDeleteTool extends BaseTool<FileDeleteInput> {
   readonly name = "file_delete";
   readonly description =
-    "Delete a file or empty directory. Cannot delete non-empty directories (use bash with rm -rf for that). The file_path must be an absolute path.";
+    "Delete a file or empty directory. Cannot delete non-empty directories (use bash with rm -rf for that). The file_path must be an absolute path within the workspace.";
   readonly inputSchema = inputSchema;
+
+  private workspaceRoot: string;
+
+  constructor(workspaceRoot?: string) {
+    super();
+    this.workspaceRoot = workspaceRoot ?? process.cwd();
+  }
 
   async execute(input: FileDeleteInput): Promise<ToolResult> {
     const filePath = path.resolve(input.file_path);
@@ -39,6 +47,10 @@ export class FileDeleteTool extends BaseTool<FileDeleteInput> {
     if (!path.isAbsolute(input.file_path)) {
       return { output: `Error: file_path must be an absolute path, got: ${input.file_path}` };
     }
+
+    // Workspace scope check
+    const scopeError = validateWorkspacePath(filePath, this.workspaceRoot);
+    if (scopeError) return { output: scopeError };
 
     // Protected path check
     if (PROTECTED_PATHS.has(filePath)) {

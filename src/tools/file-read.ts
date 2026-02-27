@@ -2,6 +2,7 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { BaseTool, type ToolResult } from "./types.js";
+import { validateWorkspacePath } from "./workspace-scope.js";
 
 const MAX_LINES = 2000;
 
@@ -21,11 +22,22 @@ type FileReadInput = z.infer<typeof inputSchema>;
 export class FileReadTool extends BaseTool<FileReadInput> {
   readonly name = "file_read";
   readonly description =
-    "Read a file from the filesystem. Returns the file contents with line numbers. The file_path must be an absolute path.";
+    "Read a file from the filesystem. Returns the file contents with line numbers. The file_path must be an absolute path within the workspace.";
   readonly inputSchema = inputSchema;
+
+  private workspaceRoot: string;
+
+  constructor(workspaceRoot?: string) {
+    super();
+    this.workspaceRoot = workspaceRoot ?? process.cwd();
+  }
 
   async execute(input: FileReadInput): Promise<ToolResult> {
     const filePath = path.resolve(input.file_path);
+
+    // Workspace scope check
+    const scopeError = validateWorkspacePath(filePath, this.workspaceRoot);
+    if (scopeError) return { output: scopeError };
 
     // Check existence
     try {
