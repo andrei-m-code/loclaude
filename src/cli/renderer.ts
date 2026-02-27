@@ -1,6 +1,6 @@
 import chalk from "chalk";
 import type { TerminalUI } from "./terminal-ui.js";
-import type { ExecutionPlan, VerificationResult } from "../agent/planner.js";
+import type { PlanStep } from "../agent/agent.js";
 
 export class Renderer {
   private ui: TerminalUI;
@@ -28,36 +28,11 @@ export class Renderer {
     }
   }
 
-  renderError(error: Error): void {
-    this.ui.writeLine(chalk.red(`Error: ${error.message}`));
-  }
-
-  renderWarning(message: string): void {
-    this.ui.writeLine(chalk.yellow(`Warning: ${message}`));
-  }
-
-  // -- 3-Phase Rendering --
-
-  renderPhaseStart(phase: "plan" | "execute" | "verify"): void {
-    const labels: Record<string, string> = {
-      plan: "Phase 1: Planning",
-      execute: "Phase 2: Executing",
-      verify: "Phase 3: Verifying",
-    };
-    const label = labels[phase] ?? phase;
-    const line = chalk.blue(`--- ${label} ---`);
-    this.ui.writeLine(line);
-  }
-
-  renderPhaseEnd(_phase: "plan" | "execute" | "verify"): void {
-    // No-op — clean output
-  }
-
-  renderPlan(plan: ExecutionPlan): void {
-    this.ui.writeLine(chalk.dim(`  Plan: ${plan.summary}`));
-    for (const step of plan.steps) {
+  renderPlan(steps: PlanStep[]): void {
+    this.ui.writeLine(chalk.dim("  Plan:"));
+    for (const step of steps) {
       const toolLabel = step.tool !== "none" ? chalk.cyan(` [${step.tool}]`) : "";
-      this.ui.writeLine(chalk.dim(`  ${step.stepNumber}. ${step.description}`) + toolLabel);
+      this.ui.writeLine(chalk.dim(`  ${step.number}. ${step.description}`) + toolLabel);
     }
     this.ui.writeLine("");
   }
@@ -67,28 +42,16 @@ export class Renderer {
   }
 
   renderStepEnd(stepNumber: number, success: boolean): void {
-    if (success) {
-      this.ui.writeLine(chalk.green(`  ✓ Step ${stepNumber} complete`));
-    } else {
-      this.ui.writeLine(chalk.red(`  ✗ Step ${stepNumber} failed`));
-    }
+    const icon = success ? chalk.green("✓") : chalk.red("✗");
+    this.ui.writeLine(chalk.dim(`  ${icon} Step ${stepNumber} done`));
   }
 
-  renderVerification(result: VerificationResult): void {
-    const colorFn =
-      result.status === "complete" ? chalk.green :
-      result.status === "partial" ? chalk.yellow :
-      chalk.red;
+  renderError(error: Error): void {
+    this.ui.writeLine(chalk.red(`Error: ${error.message}`));
+  }
 
-    this.ui.writeLine(colorFn(`  Status: ${result.status}`));
-    if (result.summary) {
-      this.ui.writeLine(chalk.dim(`  ${result.summary}`));
-    }
-    if (result.issues.length > 0) {
-      for (const issue of result.issues) {
-        this.ui.writeLine(chalk.yellow(`  - ${issue}`));
-      }
-    }
+  renderWarning(message: string): void {
+    this.ui.writeLine(chalk.yellow(`Warning: ${message}`));
   }
 
   private getToolIcon(toolName: string): string {

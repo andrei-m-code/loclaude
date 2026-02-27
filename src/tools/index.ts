@@ -1,7 +1,7 @@
 export { BaseTool, type Tool, type ToolResult } from "./types.js";
 export { ToolRegistry } from "./registry.js";
 export { zodToJsonSchema } from "./schema.js";
-export { validateWorkspacePath } from "./workspace-scope.js";
+export { validateWorkspacePath, resolveWorkspacePath } from "./workspace-scope.js";
 export { FileReadTool } from "./file-read.js";
 export { FileWriteTool } from "./file-write.js";
 export { FileEditTool } from "./file-edit.js";

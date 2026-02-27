@@ -1,4 +1,4 @@
-import type { LLMProvider, ChatStreamChunk, ToolCallContent, Message, ToolDefinition } from "../providers/types.js";
+import type { LLMProvider, ChatStreamChunk, ToolCallContent } from "../providers/types.js";
 import type { ToolRegistry } from "../tools/registry.js";
 import { ConversationManager } from "./conversation.js";
 import { ToolCallMode, detectToolCallMode } from "../providers/tool-capability.js";
@@ -7,15 +7,15 @@ import {
   parseFallbackToolCalls,
   buildFallbackToolResultMessage,
 } from "../providers/tool-fallback.js";
-import type { ExecutionPlan, PlanStep, StepResult, VerificationResult } from "./planner.js";
-import {
-  triageRequest,
-  buildPlanningPrompt,
-  buildStepExecutionPrompt,
-  buildVerificationPrompt,
-  parsePlan,
-  parseVerification,
-} from "./planner.js";
+import { buildPlanningPrompt } from "./system-prompt.js";
+
+// -- Plan Types --
+
+export interface PlanStep {
+  number: number;
+  description: string;
+  tool: string; // parsed from [tool_name] suffix, or "none"
+}
 
 // -- Agent Events --
 
@@ -39,15 +39,11 @@ export type AgentEvent =
     }
   | { type: "turn_complete"; turnNumber: number }
   | { type: "loop_complete"; totalTurns: number }
+  | { type: "plan_ready"; steps: PlanStep[] }
+  | { type: "step_start"; stepNumber: number; totalSteps: number; description: string }
+  | { type: "step_end"; stepNumber: number; success: boolean }
   | { type: "error"; error: Error }
   | { type: "warning"; message: string }
-  // 3-phase events
-  | { type: "phase_start"; phase: "plan" | "execute" | "verify" }
-  | { type: "phase_end"; phase: "plan" | "execute" | "verify" }
-  | { type: "plan_ready"; plan: ExecutionPlan }
-  | { type: "step_start"; stepNumber: number; totalSteps: number; description: string; tool: string }
-  | { type: "step_end"; stepNumber: number; success: boolean }
-  | { type: "verify_result"; result: VerificationResult }
   | { type: "usage"; promptTokens: number; completionTokens: number; totalTokens: number };
 
 // -- Agent Config --
@@ -60,6 +56,8 @@ export interface AgentConfig {
   temperature?: number;
   maxTokens?: number;
   maxTurns?: number;
+  maxContextChars?: number;
+  maxToolResultLength?: number;
 }
 
 // -- Agent --
@@ -83,124 +81,77 @@ export class Agent {
     this.maxTurns = options.config.maxTurns ?? 25;
     this.conversation = new ConversationManager({
       systemPrompt: options.config.systemPrompt,
+      maxContextChars: options.config.maxContextChars,
+      maxToolResultLength: options.config.maxToolResultLength,
     });
   }
 
   async *run(userMessage: string): AsyncIterable<AgentEvent> {
-    // Detect tool call mode on first run or after model change
     if (this.toolCallMode === null) {
       this.toolCallMode = await detectToolCallMode(this.config.model, this.config.baseUrl);
     }
 
     this.conversation.addUserMessage(userMessage);
-
-    const tools = this.toolRegistry.getToolDefinitions();
-    const toolNames = this.toolRegistry.getToolNames();
     const isFallback = this.toolCallMode === ToolCallMode.FALLBACK;
-    const workingDir = this.config.workingDirectory || process.cwd();
 
-    // ── TRIAGE ──
-    const triage = triageRequest(userMessage, toolNames);
-    if (triage === "direct") {
-      yield* this.runDirect(isFallback);
+    // Phase 1: PLAN — call LLM without tools, get plan or direct answer
+    const planningPrompt = buildPlanningPrompt({
+      tools: this.toolRegistry.getToolDefinitions(),
+      workingDirectory: this.config.workingDirectory,
+    });
+
+    let planText = "";
+    const stream = this.provider.chatStream({
+      model: this.config.model,
+      messages: this.conversation.buildMessageList(),
+      systemPrompt: planningPrompt,
+      // NO tools — forces text-only planning output
+      temperature: this.config.temperature ?? 0.1,
+      maxTokens: this.config.maxTokens,
+    });
+
+    for await (const chunk of stream) {
+      if (chunk.type === "text_delta" && chunk.text) {
+        planText += chunk.text;
+        yield { type: "text_delta", text: chunk.text };
+      }
+      if (chunk.type === "done" && chunk.usage) {
+        yield { type: "usage", promptTokens: chunk.usage.promptTokens, completionTokens: chunk.usage.completionTokens, totalTokens: chunk.usage.totalTokens };
+      }
+    }
+
+    yield { type: "text_done", fullText: planText };
+    this.conversation.addAssistantMessage(planText);
+
+    // Parse plan steps from the model's response
+    const steps = parsePlanSteps(planText);
+
+    if (steps.length === 0) {
+      // Model answered directly — no plan needed, we're done
+      yield { type: "loop_complete", totalTurns: 1 };
       return;
     }
 
-    // ── PHASE 1: PLAN ──
-    yield { type: "phase_start", phase: "plan" };
+    yield { type: "plan_ready", steps };
 
-    let plan: ExecutionPlan;
-    try {
-      plan = await this.generatePlan(userMessage, toolNames, workingDir, isFallback);
-    } catch (err) {
-      yield { type: "warning", message: `Planning failed, falling back to simple response: ${err instanceof Error ? err.message : String(err)}` };
-      plan = {
-        summary: "Respond to user request",
-        steps: [{ stepNumber: 1, description: "Respond to the user", tool: "none", expectedOutcome: "Direct response" }],
-      };
+    // Phase 2: EXECUTE — run each step with tools
+    for (let i = 0; i < steps.length; i++) {
+      const step = steps[i];
+      yield { type: "step_start", stepNumber: i + 1, totalSteps: steps.length, description: step.description };
+
+      this.conversation.addUserMessage(`Execute step ${i + 1}: ${step.description}`);
+      yield* this.runToolLoop(isFallback, 5); // max 5 turns per step
+
+      yield { type: "step_end", stepNumber: i + 1, success: true };
     }
 
-    yield { type: "plan_ready", plan };
-    yield { type: "phase_end", phase: "plan" };
+    // Phase 3: VERIFY — let model check its own work (can use tools)
+    this.conversation.addUserMessage(
+      `All steps complete. Briefly verify: did you fully accomplish "${userMessage}"? If anything is missing, fix it now. Then summarize what was done.`
+    );
+    yield* this.runToolLoop(isFallback, 3); // max 3 turns for verification
 
-    // ── PHASE 2: EXECUTE ──
-    yield { type: "phase_start", phase: "execute" };
-
-    const stepResults: StepResult[] = [];
-
-    for (const step of plan.steps) {
-      yield {
-        type: "step_start",
-        stepNumber: step.stepNumber,
-        totalSteps: plan.steps.length,
-        description: step.description,
-        tool: step.tool,
-      };
-
-      let stepResult: StepResult;
-      try {
-        stepResult = yield* this.executeStep(
-          userMessage, plan, step, stepResults, tools, toolNames, isFallback, workingDir,
-        );
-      } catch (err) {
-        stepResult = {
-          stepNumber: step.stepNumber,
-          text: `Error: ${err instanceof Error ? err.message : String(err)}`,
-          success: false,
-        };
-        yield { type: "error", error: err instanceof Error ? err : new Error(String(err)) };
-      }
-
-      stepResults.push(stepResult);
-      yield { type: "step_end", stepNumber: step.stepNumber, success: stepResult.success };
-    }
-
-    yield { type: "phase_end", phase: "execute" };
-
-    // ── PHASE 3: VERIFY ──
-    yield { type: "phase_start", phase: "verify" };
-
-    let verification: VerificationResult;
-    try {
-      verification = await this.runVerification(userMessage, plan, stepResults, isFallback);
-    } catch {
-      verification = { status: "complete", summary: "Verification skipped due to error", issues: [] };
-    }
-
-    yield { type: "verify_result", result: verification };
-    yield { type: "phase_end", phase: "verify" };
-
-    // ── PERSIST — store detailed conversation history for future turns ──
-    const assistantTexts = stepResults.map((s) => s.text).filter(Boolean);
-    const verificationNote = `[Verification: ${verification.status}] ${verification.summary}`;
-    assistantTexts.push(verificationNote);
-    const fullAssistantText = assistantTexts.join("\n\n");
-
-    const allToolCalls: ToolCallContent[] = stepResults
-      .filter((s) => s.toolCall)
-      .map((s) => ({
-        type: "tool_call" as const,
-        toolCallId: s.toolCall!.toolCallId,
-        toolName: s.toolCall!.toolName,
-        arguments: s.toolCall!.args,
-      }));
-
-    if (allToolCalls.length > 0) {
-      this.conversation.addAssistantMessage(fullAssistantText, allToolCalls);
-      for (const step of stepResults) {
-        if (step.toolCall && step.toolResult) {
-          this.conversation.addToolResult(
-            step.toolCall.toolCallId,
-            step.toolResult.output,
-            step.toolResult.isError,
-          );
-        }
-      }
-    } else {
-      this.conversation.addAssistantMessage(fullAssistantText);
-    }
-
-    yield { type: "loop_complete", totalTurns: plan.steps.length };
+    yield { type: "loop_complete", totalTurns: steps.length + 2 };
   }
 
   setModel(model: string): void {
@@ -236,182 +187,14 @@ export class Agent {
     return this.toolRegistry.getToolNames();
   }
 
-  // -- Private: Phase Implementations --
-
-  private async generatePlan(
-    userMessage: string,
-    toolNames: string[],
-    workingDir: string,
-    isFallback: boolean,
-  ): Promise<ExecutionPlan> {
-    const planningPrompt = buildPlanningPrompt(userMessage, toolNames, workingDir);
-
-    // Include conversation history so the planner knows about prior turns
-    const messages: Message[] = [
-      ...this.conversation.buildMessageList(),
-      { role: "user", content: [{ type: "text", text: planningPrompt }] },
-    ];
-
-    const systemPrompt = "You are a planning assistant. Output your plan as JSON inside <plan> tags. Do NOT execute any tools.";
-
-    const response = await this.provider.chat({
-      model: this.config.model,
-      messages,
-      systemPrompt,
-      temperature: 0.1,
-      maxTokens: this.config.maxTokens,
-    });
-
-    const rawText = response.message.content
-      .filter((c) => c.type === "text")
-      .map((c) => (c as { type: "text"; text: string }).text)
-      .join("");
-
-    return parsePlan(rawText, toolNames);
-  }
-
-  private async *executeStep(
-    userMessage: string,
-    plan: ExecutionPlan,
-    currentStep: PlanStep,
-    completedSteps: StepResult[],
-    tools: ToolDefinition[],
-    toolNames: string[],
-    isFallback: boolean,
-    workingDir: string,
-  ): AsyncGenerator<AgentEvent, StepResult> {
-    const stepPrompt = buildStepExecutionPrompt(
-      userMessage, plan, currentStep, completedSteps, workingDir,
-    );
-
-    // Include conversation history so the executor has prior turn context
-    const messages: Message[] = [
-      ...this.conversation.buildMessageList(),
-      { role: "user", content: [{ type: "text", text: stepPrompt }] },
-    ];
-
-    // Build system prompt for step execution
-    let systemPrompt = this.conversation.getSystemPrompt();
-
-    // In native mode, only pass the planned tool (if any) to restrict the model
-    let stepTools: ToolDefinition[] | undefined;
-    if (currentStep.tool !== "none") {
-      if (isFallback) {
-        // Append fallback tool prompt but only for the planned tool
-        const plannedTool = tools.find((t) => t.name === currentStep.tool);
-        if (plannedTool) {
-          systemPrompt += "\n\n" + buildFallbackToolPrompt([plannedTool]);
-        }
-      } else {
-        const plannedTool = tools.find((t) => t.name === currentStep.tool);
-        stepTools = plannedTool ? [plannedTool] : undefined;
-      }
-    }
-
-    let accumulatedText = "";
-    const pendingToolCalls: Array<{
-      toolCallId: string;
-      toolName: string;
-      argsJson: string;
-    }> = [];
-
-    const stream = this.provider.chatStream({
-      model: this.config.model,
-      messages,
-      systemPrompt,
-      tools: !isFallback ? stepTools : undefined,
-      temperature: this.config.temperature ?? 0.1,
-      maxTokens: this.config.maxTokens,
-    });
-
-    for await (const chunk of stream) {
-      const events = this.processChunk(chunk, pendingToolCalls);
-      for (const event of events) {
-        if (event.type === "text_delta") {
-          accumulatedText += event.text;
-        }
-        yield event;
-      }
-    }
-
-    // In fallback mode, parse tool calls from text
-    let fallbackToolCalls: ToolCallContent[] = [];
-    let cleanText = accumulatedText;
-
-    if (isFallback && accumulatedText) {
-      const parsed = parseFallbackToolCalls(accumulatedText);
-      fallbackToolCalls = parsed.toolCalls;
-      cleanText = parsed.text;
-
-      for (const err of parsed.errors) {
-        yield { type: "warning", message: err };
-      }
-    }
-
-    if (cleanText) {
-      yield { type: "text_done", fullText: cleanText };
-    }
-
-    // Merge tool calls
-    const allToolCalls: ToolCallContent[] = isFallback ? [...fallbackToolCalls] : [];
-
-    if (!isFallback) {
-      for (const tc of pendingToolCalls) {
-        let args: Record<string, unknown>;
-        try {
-          args = JSON.parse(tc.argsJson || "{}");
-        } catch {
-          args = {};
-          yield { type: "warning", message: `Failed to parse arguments for ${tc.toolName}: ${tc.argsJson}` };
-        }
-        allToolCalls.push({
-          type: "tool_call",
-          toolCallId: tc.toolCallId,
-          toolName: tc.toolName,
-          arguments: args,
-        });
-        yield { type: "tool_call_ready", toolName: tc.toolName, toolCallId: tc.toolCallId, args };
-      }
-    }
-
-    if (isFallback) {
-      for (const tc of fallbackToolCalls) {
-        yield { type: "tool_call_ready", toolName: tc.toolName, toolCallId: tc.toolCallId, args: tc.arguments };
-      }
-    }
-
-    // Execute only the FIRST tool call (1 per step max)
-    const result: StepResult = {
-      stepNumber: currentStep.stepNumber,
-      text: cleanText,
-      success: true,
-    };
-
-    if (allToolCalls.length > 0) {
-      const tc = allToolCalls[0];
-      const { result: toolOutput, isError } = await this.executeTool(tc);
-
-      yield {
-        type: "tool_result",
-        toolCallId: tc.toolCallId,
-        toolName: tc.toolName,
-        result: toolOutput,
-        isError,
-      };
-
-      result.toolCall = { toolName: tc.toolName, toolCallId: tc.toolCallId, args: tc.arguments };
-      result.toolResult = { output: toolOutput, isError };
-      result.success = !isError;
-    }
-
-    return result;
-  }
+  // -- Private: Tool Loop --
 
   /**
-   * Direct response path — streams response and loops on tool calls.
-   * No planning, no phases, no verification. Used for simple requests.
+   * Core agent loop — streams response and loops on tool calls.
+   * Handles both native and fallback tool calling modes.
    */
-  private async *runDirect(isFallback: boolean): AsyncIterable<AgentEvent> {
+  private async *runToolLoop(isFallback: boolean, maxTurnsOverride?: number): AsyncIterable<AgentEvent> {
+    const maxTurns = maxTurnsOverride ?? this.maxTurns;
     let systemPrompt = this.conversation.getSystemPrompt();
     const tools = this.toolRegistry.getToolDefinitions();
 
@@ -419,7 +202,7 @@ export class Agent {
       systemPrompt += "\n\n" + buildFallbackToolPrompt(tools);
     }
 
-    for (let turn = 1; turn <= this.maxTurns; turn++) {
+    for (let turn = 1; turn <= maxTurns; turn++) {
       let accumulatedText = "";
       const pendingToolCalls: Array<{
         toolCallId: string;
@@ -491,7 +274,7 @@ export class Agent {
         }
       }
 
-      // No tool calls → we're done
+      // No tool calls -> done
       if (allToolCalls.length === 0) {
         this.conversation.addAssistantMessage(cleanText);
         yield { type: "loop_complete", totalTurns: turn };
@@ -522,7 +305,6 @@ export class Agent {
       }
 
       if (isFallback && toolResults.length > 0) {
-        // Fallback mode: add all tool results as a single user message
         const resultContent = buildFallbackToolResultMessage(toolResults);
         this.conversation.addUserMessage(resultContent);
       }
@@ -530,40 +312,8 @@ export class Agent {
       yield { type: "turn_complete", turnNumber: turn };
     }
 
-    yield { type: "warning", message: `Reached maximum turns (${this.maxTurns})` };
-    yield { type: "loop_complete", totalTurns: this.maxTurns };
-  }
-
-  private async runVerification(
-    userMessage: string,
-    plan: ExecutionPlan,
-    stepResults: StepResult[],
-    isFallback: boolean,
-  ): Promise<VerificationResult> {
-    const verifyPrompt = buildVerificationPrompt(userMessage, plan, stepResults);
-
-    // Include conversation history so verification has full context
-    const messages: Message[] = [
-      ...this.conversation.buildMessageList(),
-      { role: "user", content: [{ type: "text", text: verifyPrompt }] },
-    ];
-
-    const systemPrompt = "You are a verification assistant. Evaluate whether the task was completed successfully. Output JSON inside <verify> tags.";
-
-    const response = await this.provider.chat({
-      model: this.config.model,
-      messages,
-      systemPrompt,
-      temperature: 0.1,
-      maxTokens: this.config.maxTokens,
-    });
-
-    const rawText = response.message.content
-      .filter((c) => c.type === "text")
-      .map((c) => (c as { type: "text"; text: string }).text)
-      .join("");
-
-    return parseVerification(rawText);
+    yield { type: "warning", message: `Reached maximum turns (${maxTurns})` };
+    yield { type: "loop_complete", totalTurns: maxTurns };
   }
 
   // -- Private: Chunk Processing --
@@ -644,4 +394,32 @@ export class Agent {
       return { result: `Error: ${message}`, isError: true };
     }
   }
+}
+
+// -- Plan Step Parser --
+
+/**
+ * Parse numbered plan steps from the model's text response.
+ * Matches lines like "1. Some description [tool_name]" or "1. Some description".
+ */
+export function parsePlanSteps(text: string): PlanStep[] {
+  const steps: PlanStep[] = [];
+  const stepRegex = /^\s*(\d+)\.\s+(.+?)(?:\s*\[(\w+)\])?\s*$/gm;
+  let match: RegExpExecArray | null;
+
+  while ((match = stepRegex.exec(text)) !== null) {
+    steps.push({
+      number: parseInt(match[1], 10),
+      description: match[2].trim(),
+      tool: match[3]?.toLowerCase() ?? "none",
+    });
+  }
+
+  // Only return steps if we found 2+ (a single step = model is just using a list)
+  // Exception: if the single step has a tool hint, it's a real plan
+  if (steps.length === 1 && steps[0].tool === "none") {
+    return [];
+  }
+
+  return steps.slice(0, 10); // cap at 10 steps
 }

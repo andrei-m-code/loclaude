@@ -3,7 +3,7 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as os from "node:os";
 import { BaseTool, type ToolResult } from "./types.js";
-import { validateWorkspacePath } from "./workspace-scope.js";
+import { validateWorkspacePath, resolveWorkspacePath } from "./workspace-scope.js";
 
 const PROTECTED_PATHS = new Set([
   "/",
@@ -23,7 +23,7 @@ const PROTECTED_PATHS = new Set([
 ]);
 
 const inputSchema = z.object({
-  file_path: z.string().describe("Absolute path to the file or empty directory to delete"),
+  file_path: z.string().describe("Path to the file or empty directory to delete (absolute or relative to workspace)"),
 });
 
 type FileDeleteInput = z.infer<typeof inputSchema>;
@@ -31,7 +31,7 @@ type FileDeleteInput = z.infer<typeof inputSchema>;
 export class FileDeleteTool extends BaseTool<FileDeleteInput> {
   readonly name = "file_delete";
   readonly description =
-    "Delete a file or empty directory. Cannot delete non-empty directories (use bash with rm -rf for that). The file_path must be an absolute path within the workspace.";
+    "Delete a file or empty directory. Cannot delete non-empty directories (use bash with rm -rf for that). Paths can be absolute or relative to the workspace.";
   readonly inputSchema = inputSchema;
 
   private workspaceRoot: string;
@@ -42,14 +42,10 @@ export class FileDeleteTool extends BaseTool<FileDeleteInput> {
   }
 
   async execute(input: FileDeleteInput): Promise<ToolResult> {
-    const filePath = path.resolve(input.file_path);
-
-    if (!path.isAbsolute(input.file_path)) {
-      return { output: `Error: file_path must be an absolute path, got: ${input.file_path}` };
-    }
+    const filePath = resolveWorkspacePath(input.file_path, this.workspaceRoot);
 
     // Workspace scope check
-    const scopeError = validateWorkspacePath(filePath, this.workspaceRoot);
+    const scopeError = validateWorkspacePath(input.file_path, this.workspaceRoot);
     if (scopeError) return { output: scopeError };
 
     // Protected path check

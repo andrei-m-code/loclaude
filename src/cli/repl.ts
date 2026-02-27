@@ -1,3 +1,4 @@
+import * as path from "node:path";
 import chalk from "chalk";
 import type { Agent, AgentEvent } from "../agent/agent.js";
 import { TerminalUI } from "./terminal-ui.js";
@@ -8,6 +9,7 @@ interface ReplOptions {
   agent: Agent;
   providerName: string;
   modelName: string;
+  workingDirectory: string;
 }
 
 function formatTokens(n: number): string {
@@ -18,6 +20,7 @@ function formatTokens(n: number): string {
 
 export async function startRepl(options: ReplOptions): Promise<never> {
   const { agent, providerName } = options;
+  const folderName = path.basename(options.workingDirectory);
 
   let running = false;
   let totalIn = 0;
@@ -53,7 +56,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
   ui.start();
 
   // Header
-  ui.writeLine(chalk.dim("  loclaude") + chalk.dim(" ~ ") + chalk.white(agent.getModel()) + chalk.dim(" ~ ") + chalk.dim("in:0 out:0"));
+  ui.writeLine(chalk.dim("  loclaude") + chalk.dim(" ~ ") + chalk.white(agent.getModel()) + chalk.dim(" ~ ") + chalk.cyan(folderName) + chalk.dim(" ~ ") + chalk.dim("in:0 out:0"));
   ui.writeLine(chalk.dim("  /help for commands\n"));
 
   async function handleSubmit(text: string): Promise<void> {
@@ -82,49 +85,6 @@ export async function startRepl(options: ReplOptions): Promise<never> {
         if (!running) break;
 
         switch (event.type) {
-          case "phase_start":
-            ui.stopInlineSpinner();
-            ui.stopSpinner();
-            renderer.renderPhaseStart(event.phase);
-            if (event.phase === "plan") {
-              ui.startSpinner("Planning...");
-            } else if (event.phase === "verify") {
-              ui.startSpinner("Verifying...");
-            }
-            break;
-
-          case "phase_end":
-            ui.stopSpinner();
-            renderer.renderPhaseEnd(event.phase);
-            break;
-
-          case "plan_ready":
-            ui.stopSpinner();
-            renderer.renderPlan(event.plan);
-            break;
-
-          case "step_start":
-            renderer.renderStepStart(event.stepNumber, event.totalSteps, event.description);
-            ui.startSpinner(`Step ${event.stepNumber}/${event.totalSteps}...`);
-            firstTextChunk = true;
-            ui.startInlineSpinner();
-            break;
-
-          case "step_end":
-            ui.stopInlineSpinner();
-            ui.stopSpinner();
-            if (!firstTextChunk) {
-              ui.writeLine(""); // newline after streamed text
-            }
-            renderer.renderStepEnd(event.stepNumber, event.success);
-            firstTextChunk = true;
-            break;
-
-          case "verify_result":
-            ui.stopSpinner();
-            renderer.renderVerification(event.result);
-            break;
-
           case "text_delta":
             if (firstTextChunk) {
               ui.stopInlineSpinner();
@@ -166,13 +126,32 @@ export async function startRepl(options: ReplOptions): Promise<never> {
           case "usage":
             totalIn += event.promptTokens;
             totalOut += event.completionTokens;
-            ui.setStatus(`${agent.getModel()} | in:${formatTokens(totalIn)} out:${formatTokens(totalOut)}`);
+            ui.setStatus(`${agent.getModel()} | ${folderName} | in:${formatTokens(totalIn)} out:${formatTokens(totalOut)}`);
             break;
 
           case "turn_complete":
             break;
 
           case "loop_complete":
+            break;
+
+          case "plan_ready":
+            renderer.renderPlan(event.steps);
+            break;
+
+          case "step_start":
+            renderer.renderStepStart(event.stepNumber, event.totalSteps, event.description);
+            ui.startSpinner(`Step ${event.stepNumber}/${event.totalSteps}...`);
+            firstTextChunk = true;
+            ui.startInlineSpinner();
+            break;
+
+          case "step_end":
+            ui.stopInlineSpinner();
+            ui.stopSpinner();
+            if (!firstTextChunk) ui.writeLine("");
+            renderer.renderStepEnd(event.stepNumber, event.success);
+            firstTextChunk = true;
             break;
 
           case "error":
@@ -201,7 +180,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
     ui.stopSpinner();
     // Restore persistent status with token counts
     if (totalIn > 0 || totalOut > 0) {
-      ui.setStatus(`${agent.getModel()} | in:${formatTokens(totalIn)} out:${formatTokens(totalOut)}`);
+      ui.setStatus(`${agent.getModel()} | ${folderName} | in:${formatTokens(totalIn)} out:${formatTokens(totalOut)}`);
     }
     ui.setRunning(false);
     running = false;

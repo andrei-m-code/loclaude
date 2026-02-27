@@ -2,12 +2,12 @@ import { z } from "zod";
 import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import { BaseTool, type ToolResult } from "./types.js";
-import { validateWorkspacePath } from "./workspace-scope.js";
+import { validateWorkspacePath, resolveWorkspacePath } from "./workspace-scope.js";
 
 const MAX_LINES = 2000;
 
 const inputSchema = z.object({
-  file_path: z.string().describe("Absolute path to the file to read"),
+  file_path: z.string().describe("Path to the file to read (absolute or relative to workspace)"),
   offset: z
     .number()
     .int()
@@ -22,7 +22,7 @@ type FileReadInput = z.infer<typeof inputSchema>;
 export class FileReadTool extends BaseTool<FileReadInput> {
   readonly name = "file_read";
   readonly description =
-    "Read a file from the filesystem. Returns the file contents with line numbers. The file_path must be an absolute path within the workspace.";
+    "Read a file from the filesystem. Returns the file contents with line numbers. Paths can be absolute or relative to the workspace.";
   readonly inputSchema = inputSchema;
 
   private workspaceRoot: string;
@@ -33,10 +33,10 @@ export class FileReadTool extends BaseTool<FileReadInput> {
   }
 
   async execute(input: FileReadInput): Promise<ToolResult> {
-    const filePath = path.resolve(input.file_path);
+    const filePath = resolveWorkspacePath(input.file_path, this.workspaceRoot);
 
     // Workspace scope check
-    const scopeError = validateWorkspacePath(filePath, this.workspaceRoot);
+    const scopeError = validateWorkspacePath(input.file_path, this.workspaceRoot);
     if (scopeError) return { output: scopeError };
 
     // Check existence

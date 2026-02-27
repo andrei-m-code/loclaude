@@ -3,10 +3,10 @@ import * as fs from "node:fs/promises";
 import * as path from "node:path";
 import * as crypto from "node:crypto";
 import { BaseTool, type ToolResult } from "./types.js";
-import { validateWorkspacePath } from "./workspace-scope.js";
+import { validateWorkspacePath, resolveWorkspacePath } from "./workspace-scope.js";
 
 const inputSchema = z.object({
-  file_path: z.string().describe("Absolute path to the file to edit"),
+  file_path: z.string().describe("Path to the file to edit (absolute or relative to workspace)"),
   old_string: z.string().min(1).describe("Exact string to find in the file (case-sensitive, whitespace-sensitive)"),
   new_string: z.string().describe("Replacement string (must differ from old_string; empty string deletes the match)"),
   replace_all: z
@@ -95,14 +95,10 @@ export class FileEditTool extends BaseTool<FileEditInput> {
   }
 
   async execute(input: FileEditInput): Promise<ToolResult> {
-    const filePath = path.resolve(input.file_path);
-
-    if (!path.isAbsolute(input.file_path)) {
-      return { output: `Error: file_path must be an absolute path, got: ${input.file_path}` };
-    }
+    const filePath = resolveWorkspacePath(input.file_path, this.workspaceRoot);
 
     // Workspace scope check
-    const scopeError = validateWorkspacePath(filePath, this.workspaceRoot);
+    const scopeError = validateWorkspacePath(input.file_path, this.workspaceRoot);
     if (scopeError) return { output: scopeError };
 
     if (input.old_string === input.new_string) {

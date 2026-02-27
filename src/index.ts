@@ -70,6 +70,7 @@ async function main() {
     agent,
     providerName: config.provider.name,
     modelName: config.provider.model,
+    workingDirectory: cwd,
   });
 }
 
