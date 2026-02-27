@@ -17,10 +17,10 @@ const BOX = {
  *
  * Layout:
  *   Row 1..H-4  — Scroll region (output from agent, tool calls, etc.)
- *   Row H-3     — Status line (spinner + status text)
- *   Row H-2     — ┌──────────────────────────┐
- *   Row H-1     — │ > user input█            │
- *   Row H       — └──────────────────────────┘
+ *   Row H-3     — ┌──────────────────────────┐
+ *   Row H-2     — │ > user input█            │
+ *   Row H-1     — └──────────────────────────┘
+ *   Row H       — Status line (spinner + status text)
  *
  * Uses alternate screen buffer so the user's terminal is restored on exit.
  */
@@ -250,32 +250,18 @@ export class TerminalUI {
     this.raw(`${ESC}8`);
   }
 
-  /** Write status line. Caller must save/restore cursor. */
-  private drawStatusLine_raw(): void {
-    const row = this.rows - 3;
-    this.raw(`${ESC}[${row};1H${ESC}[2K`);
-    if (this.statusText) {
-      if (this.spinnerTimer) {
-        const frame = this.spinnerFrames[this.spinnerIdx];
-        this.raw(chalk.yellow(` ${frame} ${this.statusText}`));
-      } else {
-        this.raw(chalk.dim(`  ${this.statusText}`));
-      }
-    }
-  }
-
   /** Write the bordered input box (3 rows). Caller must save/restore cursor. */
   private drawInputBox_raw(): void {
     const w = this.cols;
     const innerW = Math.max(1, w - 2); // width inside the box
 
-    // Top border — row H-2
-    const topRow = this.rows - 2;
+    // Top border — row H-3
+    const topRow = this.rows - 3;
     this.raw(`${ESC}[${topRow};1H${ESC}[2K`);
     this.raw(chalk.dim(BOX.topLeft + BOX.horizontal.repeat(innerW) + BOX.topRight));
 
-    // Input content — row H-1
-    const midRow = this.rows - 1;
+    // Input content — row H-2
+    const midRow = this.rows - 2;
     this.raw(`${ESC}[${midRow};1H${ESC}[2K`);
     const cursor = this.running ? " " : "█";
     const content = this.inputBuffer + cursor;
@@ -293,10 +279,24 @@ export class TerminalUI {
         chalk.dim(BOX.vertical),
     );
 
-    // Bottom border — row H
-    const botRow = this.rows;
+    // Bottom border — row H-1
+    const botRow = this.rows - 1;
     this.raw(`${ESC}[${botRow};1H${ESC}[2K`);
     this.raw(chalk.dim(BOX.bottomLeft + BOX.horizontal.repeat(innerW) + BOX.bottomRight));
+  }
+
+  /** Write status line below the input box. Caller must save/restore cursor. */
+  private drawStatusLine_raw(): void {
+    const row = this.rows;
+    this.raw(`${ESC}[${row};1H${ESC}[2K`);
+    if (this.statusText) {
+      if (this.spinnerTimer) {
+        const frame = this.spinnerFrames[this.spinnerIdx];
+        this.raw(chalk.yellow(` ${frame} ${this.statusText}`));
+      } else {
+        this.raw(chalk.dim(`  ${this.statusText}`));
+      }
+    }
   }
 
   private onKeypress = (data: string): void => {
