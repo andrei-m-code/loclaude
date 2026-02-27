@@ -39,6 +39,7 @@ export class TerminalUI {
   // Inline spinner (in scroll region, where text will appear)
   private inlineSpinnerTimer: ReturnType<typeof setInterval> | null = null;
   private inlineSpinnerIdx = 0;
+  private inlineFrameWidth = 5; // visible chars: "⠋ ▰▱▱"
 
   // Bottom bar height: status + 3 lines for bordered input box
   private static BOTTOM_HEIGHT = 4;
@@ -140,22 +141,61 @@ export class TerminalUI {
   startInlineSpinner(): void {
     this.stopInlineSpinner();
     this.inlineSpinnerIdx = 0;
+    const bs = "\b".repeat(this.inlineFrameWidth);
     // Write first frame immediately
-    const first = chalk.dim(this.spinnerFrames[0]);
-    this.raw(`${first}\b`);
+    this.raw(this.getInlineFrame(0) + bs);
     this.inlineSpinnerTimer = setInterval(() => {
-      this.inlineSpinnerIdx = (this.inlineSpinnerIdx + 1) % this.spinnerFrames.length;
-      const frame = chalk.dim(this.spinnerFrames[this.inlineSpinnerIdx]);
-      this.raw(`${frame}\b`);
-    }, 80);
+      this.inlineSpinnerIdx += 1;
+      this.raw(this.getInlineFrame(this.inlineSpinnerIdx) + bs);
+    }, 100);
   }
 
-  /** Stop the inline spinner and clear its character. */
+  /** Stop the inline spinner and clear its characters. */
   stopInlineSpinner(): void {
     if (this.inlineSpinnerTimer) {
       clearInterval(this.inlineSpinnerTimer);
       this.inlineSpinnerTimer = null;
-      this.raw(" \b"); // clear the spinner character
+      // Erase the frame: overwrite with spaces, then backspace
+      const blank = " ".repeat(this.inlineFrameWidth);
+      const bs = "\b".repeat(this.inlineFrameWidth);
+      this.raw(blank + bs);
+    }
+  }
+
+  /** Build a single inline spinner frame — cycling color pulse. */
+  private getInlineFrame(idx: number): string {
+    const bar = (filled: number, color: (s: string) => string): string => {
+      const on = "▰".repeat(filled);
+      const off = "▱".repeat(3 - filled);
+      return filled === 3
+        ? color(on)
+        : color(on) + chalk.dim(off);
+    };
+
+    const braille = this.spinnerFrames;
+    const b = braille[idx % braille.length];
+
+    // 12-frame cycle: green pulse → cyan peak → magenta pulse → dim rest
+    const phase = idx % 12;
+    switch (phase) {
+      // Green builds up
+      case 0:  return chalk.green(b) + " " + bar(1, chalk.green);
+      case 1:  return chalk.green(b) + " " + bar(2, chalk.green);
+      case 2:  return chalk.greenBright(b) + " " + bar(3, chalk.greenBright);
+      // Cyan peak + fade
+      case 3:  return chalk.cyanBright(b) + " " + bar(3, chalk.cyanBright);
+      case 4:  return chalk.cyan(b) + " " + bar(2, chalk.cyan);
+      case 5:  return chalk.cyan(b) + " " + bar(1, chalk.cyan);
+      // Dim rest
+      case 6:  return chalk.dim(b) + " " + chalk.dim("▱▱▱");
+      // Magenta builds up
+      case 7:  return chalk.magenta(b) + " " + bar(1, chalk.magenta);
+      case 8:  return chalk.magenta(b) + " " + bar(2, chalk.magenta);
+      case 9:  return chalk.magentaBright(b) + " " + bar(3, chalk.magentaBright);
+      // Magenta fade
+      case 10: return chalk.magenta(b) + " " + bar(2, chalk.magenta);
+      case 11: return chalk.dim(b) + " " + chalk.dim("▱▱▱");
+      default: return chalk.dim(b) + " " + chalk.dim("▱▱▱");
     }
   }
 
