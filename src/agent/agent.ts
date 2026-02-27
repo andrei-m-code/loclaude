@@ -170,9 +170,35 @@ export class Agent {
     yield { type: "verify_result", result: verification };
     yield { type: "phase_end", phase: "verify" };
 
-    // ── PERSIST ──
-    const summary = this.buildConversationSummary(plan, stepResults, verification);
-    this.conversation.addAssistantMessage(summary);
+    // ── PERSIST — store detailed conversation history for future turns ──
+    const assistantTexts = stepResults.map((s) => s.text).filter(Boolean);
+    const verificationNote = `[Verification: ${verification.status}] ${verification.summary}`;
+    assistantTexts.push(verificationNote);
+    const fullAssistantText = assistantTexts.join("\n\n");
+
+    const allToolCalls: ToolCallContent[] = stepResults
+      .filter((s) => s.toolCall)
+      .map((s) => ({
+        type: "tool_call" as const,
+        toolCallId: s.toolCall!.toolCallId,
+        toolName: s.toolCall!.toolName,
+        arguments: s.toolCall!.args,
+      }));
+
+    if (allToolCalls.length > 0) {
+      this.conversation.addAssistantMessage(fullAssistantText, allToolCalls);
+      for (const step of stepResults) {
+        if (step.toolCall && step.toolResult) {
+          this.conversation.addToolResult(
+            step.toolCall.toolCallId,
+            step.toolResult.output,
+            step.toolResult.isError,
+          );
+        }
+      }
+    } else {
+      this.conversation.addAssistantMessage(fullAssistantText);
+    }
 
     yield { type: "loop_complete", totalTurns: plan.steps.length };
   }
@@ -220,7 +246,9 @@ export class Agent {
   ): Promise<ExecutionPlan> {
     const planningPrompt = buildPlanningPrompt(userMessage, toolNames, workingDir);
 
+    // Include conversation history so the planner knows about prior turns
     const messages: Message[] = [
+      ...this.conversation.buildMessageList(),
       { role: "user", content: [{ type: "text", text: planningPrompt }] },
     ];
 
@@ -256,7 +284,9 @@ export class Agent {
       userMessage, plan, currentStep, completedSteps, workingDir,
     );
 
+    // Include conversation history so the executor has prior turn context
     const messages: Message[] = [
+      ...this.conversation.buildMessageList(),
       { role: "user", content: [{ type: "text", text: stepPrompt }] },
     ];
 
@@ -512,7 +542,9 @@ export class Agent {
   ): Promise<VerificationResult> {
     const verifyPrompt = buildVerificationPrompt(userMessage, plan, stepResults);
 
+    // Include conversation history so verification has full context
     const messages: Message[] = [
+      ...this.conversation.buildMessageList(),
       { role: "user", content: [{ type: "text", text: verifyPrompt }] },
     ];
 
@@ -532,32 +564,6 @@ export class Agent {
       .join("");
 
     return parseVerification(rawText);
-  }
-
-  private buildConversationSummary(
-    plan: ExecutionPlan,
-    stepResults: StepResult[],
-    verification: VerificationResult,
-  ): string {
-    const parts: string[] = [];
-
-    parts.push(`Plan: ${plan.summary}`);
-
-    for (const step of stepResults) {
-      const status = step.success ? "OK" : "FAILED";
-      let detail = step.text;
-      if (step.toolResult) {
-        detail = `[${step.toolCall?.toolName}] ${step.toolResult.output}`;
-      }
-      if (detail.length > 500) {
-        detail = detail.slice(0, 500) + "...";
-      }
-      parts.push(`Step ${step.stepNumber} [${status}]: ${detail}`);
-    }
-
-    parts.push(`Verification: ${verification.status} — ${verification.summary}`);
-
-    return parts.join("\n");
   }
 
   // -- Private: Chunk Processing --
