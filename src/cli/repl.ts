@@ -71,6 +71,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
     // Slash commands
     if (text.startsWith("/")) {
       await handleSlashCommand(text, agent, ui, renderer);
+      ui.setStatus(buildStatusText());
       return;
     }
 
@@ -187,9 +188,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
     ui.writeLine(""); // blank line after response
     ui.stopSpinner();
     // Restore persistent status with token counts and current dir
-    if (totalIn > 0 || totalOut > 0) {
-      ui.setStatus(buildStatusText());
-    }
+    ui.setStatus(buildStatusText());
     ui.setRunning(false);
     running = false;
     ui.ensureInputReady();

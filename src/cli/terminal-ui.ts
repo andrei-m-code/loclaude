@@ -120,7 +120,7 @@ export class TerminalUI {
     }, 80);
   }
 
-  /** Stop the spinner and clear the status line. */
+  /** Stop the spinner animation but keep the status text visible. */
   stopSpinner(): void {
     if (this.spinnerTimer) {
       clearInterval(this.spinnerTimer);
@@ -128,7 +128,6 @@ export class TerminalUI {
       // Show cursor again
       this.raw(`${ESC}[?25h`);
     }
-    this.statusText = "";
     this.drawStatusLine();
   }
 
@@ -153,6 +152,7 @@ export class TerminalUI {
     // Always show cursor — stopInlineSpinner/stopSpinner only show it
     // when their timer was active, which is a no-op if already stopped.
     this.raw(`${ESC}[?25h`);
+    this.drawStatusLine();
     this.drawInputBox();
   }
 
