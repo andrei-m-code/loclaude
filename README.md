@@ -1,4 +1,4 @@
-# loclaude
+# LoClaude - Local Claude - Personal Assistant based on Local Models
 
 An AI-powered coding agent that runs in the terminal and works with **any LLM provider** — starting with [Ollama](https://ollama.com) for fully local, private inference.
 
