@@ -1,5 +1,7 @@
 // -- Types --
 
+export type TriageResult = "direct" | "planned";
+
 export interface PlanStep {
   stepNumber: number;
   description: string;
@@ -10,7 +12,6 @@ export interface PlanStep {
 export interface ExecutionPlan {
   summary: string;
   steps: PlanStep[];
-  isSimpleQuestion: boolean;
 }
 
 export interface StepResult {
@@ -25,6 +26,69 @@ export interface VerificationResult {
   status: "complete" | "partial" | "failed";
   summary: string;
   issues: string[];
+}
+
+// -- Triage --
+
+const ACTION_VERBS = [
+  "create", "write", "edit", "modify", "delete", "refactor",
+  "implement", "add", "fix", "update", "build", "deploy",
+  "install", "move", "rename", "replace", "migrate",
+  "set up", "configure", "remove",
+];
+
+const MULTI_STEP_PATTERNS = [
+  /\band then\b/i,
+  /\bafter that\b/i,
+  /\bfirst\b.*\bthen\b/is,
+  /\bstep \d/i,
+  /^\s*\d+\.\s+/m,
+];
+
+const FILE_PATH_PATTERN = /(?:\.\/|[\w-]+\/)+[\w.-]+\.[\w]+|(?:\*\*\/|\*\.)\w+/g;
+
+/**
+ * Fast heuristic triage — no LLM call. Classifies user messages as "direct"
+ * (stream response immediately, loop on tool calls) or "planned" (full 3-phase).
+ *
+ * Returns "planned" only when 2+ complexity signals are detected.
+ */
+export function triageRequest(userMessage: string, _toolNames: string[]): TriageResult {
+  let signals = 0;
+
+  // Signal 1: 2+ distinct action verbs
+  const lowerMsg = userMessage.toLowerCase();
+  let verbCount = 0;
+  for (const verb of ACTION_VERBS) {
+    // Word boundary match (handle "set up" as two-word verb)
+    const pattern = new RegExp(`\\b${verb}\\b`, "i");
+    if (pattern.test(lowerMsg)) {
+      verbCount++;
+      if (verbCount >= 2) break;
+    }
+  }
+  if (verbCount >= 2) signals++;
+
+  // Signal 2: Multi-step language
+  for (const pattern of MULTI_STEP_PATTERNS) {
+    if (pattern.test(userMessage)) {
+      signals++;
+      break;
+    }
+  }
+
+  // Signal 3: Long message (> 60 words)
+  const wordCount = userMessage.trim().split(/\s+/).length;
+  if (wordCount > 60) signals++;
+
+  // Signal 4: 2+ distinct file paths or glob patterns
+  const pathMatches = userMessage.match(FILE_PATH_PATTERN);
+  if (pathMatches) {
+    const uniquePaths = new Set(pathMatches);
+    if (uniquePaths.size >= 2) signals++;
+  }
+
+  return signals >= 2 ? "planned" : "direct";
 }
 
 // -- Prompt Builders --
@@ -239,10 +303,8 @@ function normalizePlan(raw: unknown, toolNames: string[]): ExecutionPlan | null 
   });
 
   const summary = typeof obj.summary === "string" ? obj.summary : normalizedSteps[0].description;
-  const isSimpleQuestion =
-    normalizedSteps.length === 1 && normalizedSteps[0].tool === "none";
 
-  return { summary, steps: normalizedSteps, isSimpleQuestion };
+  return { summary, steps: normalizedSteps };
 }
 
 /**
@@ -303,11 +365,9 @@ export function parsePlan(rawOutput: string, toolNames: string[]): ExecutionPlan
       };
     });
 
-    const isSimple = steps.length === 1 && steps[0].tool === "none";
     return {
       summary: steps[0].description,
       steps,
-      isSimpleQuestion: isSimple,
     };
   }
 
@@ -315,7 +375,6 @@ export function parsePlan(rawOutput: string, toolNames: string[]): ExecutionPlan
   return {
     summary: "Respond to user request",
     steps: [{ stepNumber: 1, description: "Respond to the user", tool: "none", expectedOutcome: "Direct response" }],
-    isSimpleQuestion: true,
   };
 }
 

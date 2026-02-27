@@ -9,6 +9,7 @@ import {
 } from "../providers/tool-fallback.js";
 import type { ExecutionPlan, PlanStep, StepResult, VerificationResult } from "./planner.js";
 import {
+  triageRequest,
   buildPlanningPrompt,
   buildStepExecutionPrompt,
   buildVerificationPrompt,
@@ -97,6 +98,13 @@ export class Agent {
     const isFallback = this.toolCallMode === ToolCallMode.FALLBACK;
     const workingDir = this.config.workingDirectory || process.cwd();
 
+    // ── TRIAGE ──
+    const triage = triageRequest(userMessage, toolNames);
+    if (triage === "direct") {
+      yield* this.runDirect(isFallback);
+      return;
+    }
+
     // ── PHASE 1: PLAN ──
     yield { type: "phase_start", phase: "plan" };
 
@@ -108,18 +116,11 @@ export class Agent {
       plan = {
         summary: "Respond to user request",
         steps: [{ stepNumber: 1, description: "Respond to the user", tool: "none", expectedOutcome: "Direct response" }],
-        isSimpleQuestion: true,
       };
     }
 
     yield { type: "plan_ready", plan };
     yield { type: "phase_end", phase: "plan" };
-
-    // ── SIMPLE QUESTION SHORT-CIRCUIT ──
-    if (plan.isSimpleQuestion) {
-      yield* this.runSimpleResponse(userMessage, isFallback);
-      return;
-    }
 
     // ── PHASE 2: EXECUTE ──
     yield { type: "phase_start", phase: "execute" };
@@ -371,11 +372,11 @@ export class Agent {
     return result;
   }
 
-  private async *runSimpleResponse(
-    userMessage: string,
-    isFallback: boolean,
-  ): AsyncIterable<AgentEvent> {
-    // Stream a normal response using the full conversation history
+  /**
+   * Direct response path — streams response and loops on tool calls.
+   * No planning, no phases, no verification. Used for simple requests.
+   */
+  private async *runDirect(isFallback: boolean): AsyncIterable<AgentEvent> {
     let systemPrompt = this.conversation.getSystemPrompt();
     const tools = this.toolRegistry.getToolDefinitions();
 
@@ -383,48 +384,119 @@ export class Agent {
       systemPrompt += "\n\n" + buildFallbackToolPrompt(tools);
     }
 
-    let accumulatedText = "";
-    const pendingToolCalls: Array<{
-      toolCallId: string;
-      toolName: string;
-      argsJson: string;
-    }> = [];
+    for (let turn = 1; turn <= this.maxTurns; turn++) {
+      let accumulatedText = "";
+      const pendingToolCalls: Array<{
+        toolCallId: string;
+        toolName: string;
+        argsJson: string;
+      }> = [];
 
-    const stream = this.provider.chatStream({
-      model: this.config.model,
-      messages: this.conversation.buildMessageList(),
-      systemPrompt,
-      tools: !isFallback && tools.length > 0 ? tools : undefined,
-      temperature: this.config.temperature ?? 0.1,
-      maxTokens: this.config.maxTokens,
-    });
+      const stream = this.provider.chatStream({
+        model: this.config.model,
+        messages: this.conversation.buildMessageList(),
+        systemPrompt,
+        tools: !isFallback && tools.length > 0 ? tools : undefined,
+        temperature: this.config.temperature ?? 0.1,
+        maxTokens: this.config.maxTokens,
+      });
 
-    for await (const chunk of stream) {
-      const events = this.processChunk(chunk, pendingToolCalls);
-      for (const event of events) {
-        if (event.type === "text_delta") {
-          accumulatedText += event.text;
+      for await (const chunk of stream) {
+        const events = this.processChunk(chunk, pendingToolCalls);
+        for (const event of events) {
+          if (event.type === "text_delta") {
+            accumulatedText += event.text;
+          }
+          yield event;
         }
-        yield event;
       }
-    }
 
-    // Handle fallback tool calls
-    let cleanText = accumulatedText;
-    if (isFallback && accumulatedText) {
-      const parsed = parseFallbackToolCalls(accumulatedText);
-      cleanText = parsed.text;
-      for (const err of parsed.errors) {
-        yield { type: "warning", message: err };
+      // Parse fallback tool calls from text if needed
+      let fallbackToolCalls: ToolCallContent[] = [];
+      let cleanText = accumulatedText;
+
+      if (isFallback && accumulatedText) {
+        const parsed = parseFallbackToolCalls(accumulatedText);
+        fallbackToolCalls = parsed.toolCalls;
+        cleanText = parsed.text;
+        for (const err of parsed.errors) {
+          yield { type: "warning", message: err };
+        }
       }
+
+      if (cleanText) {
+        yield { type: "text_done", fullText: cleanText };
+      }
+
+      // Merge native + fallback tool calls
+      const allToolCalls: ToolCallContent[] = isFallback ? [...fallbackToolCalls] : [];
+
+      if (!isFallback) {
+        for (const tc of pendingToolCalls) {
+          let args: Record<string, unknown>;
+          try {
+            args = JSON.parse(tc.argsJson || "{}");
+          } catch {
+            args = {};
+            yield { type: "warning", message: `Failed to parse arguments for ${tc.toolName}: ${tc.argsJson}` };
+          }
+          allToolCalls.push({
+            type: "tool_call",
+            toolCallId: tc.toolCallId,
+            toolName: tc.toolName,
+            arguments: args,
+          });
+          yield { type: "tool_call_ready", toolName: tc.toolName, toolCallId: tc.toolCallId, args };
+        }
+      }
+
+      if (isFallback) {
+        for (const tc of fallbackToolCalls) {
+          yield { type: "tool_call_ready", toolName: tc.toolName, toolCallId: tc.toolCallId, args: tc.arguments };
+        }
+      }
+
+      // No tool calls → we're done
+      if (allToolCalls.length === 0) {
+        this.conversation.addAssistantMessage(cleanText);
+        yield { type: "loop_complete", totalTurns: turn };
+        return;
+      }
+
+      // Execute tool calls and add results to conversation
+      this.conversation.addAssistantMessage(cleanText, allToolCalls);
+
+      const toolResults: Array<{ toolName: string; result: string; isError: boolean }> = [];
+
+      for (const tc of allToolCalls) {
+        const { result: toolOutput, isError } = await this.executeTool(tc);
+
+        yield {
+          type: "tool_result",
+          toolCallId: tc.toolCallId,
+          toolName: tc.toolName,
+          result: toolOutput,
+          isError,
+        };
+
+        if (isFallback) {
+          toolResults.push({ toolName: tc.toolName, result: toolOutput, isError });
+        } else {
+          this.conversation.addToolResult(tc.toolCallId, toolOutput, isError);
+        }
+      }
+
+      if (isFallback && toolResults.length > 0) {
+        // Fallback mode: add all tool results as a single user message
+        const resultContent = buildFallbackToolResultMessage(toolResults);
+        this.conversation.addUserMessage(resultContent);
+      }
+
+      yield { type: "turn_complete", turnNumber: turn };
     }
 
-    if (cleanText) {
-      yield { type: "text_done", fullText: cleanText };
-    }
-
-    this.conversation.addAssistantMessage(cleanText);
-    yield { type: "loop_complete", totalTurns: 1 };
+    yield { type: "warning", message: `Reached maximum turns (${this.maxTurns})` };
+    yield { type: "loop_complete", totalTurns: this.maxTurns };
   }
 
   private async runVerification(
