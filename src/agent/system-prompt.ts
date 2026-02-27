@@ -12,6 +12,7 @@ export interface SystemPromptOptions {
 export interface PlanningPromptOptions {
   tools: ToolDefinition[];
   workingDirectory: string;
+  workspaceContext?: string;
 }
 
 export function buildSystemPrompt(options: SystemPromptOptions): string {
@@ -146,12 +147,20 @@ function buildToolUsageGuidelines(options: SystemPromptOptions): string {
 export function buildPlanningPrompt(options: PlanningPromptOptions): string {
   const toolList = options.tools.map(t => `- ${t.name}: ${t.description}`).join("\n");
 
-  return `You are loclaude, an AI coding agent in the user's terminal. You help with software engineering tasks by reading/writing files, editing code, running commands, and searching codebases.
+  const sections: string[] = [];
+
+  sections.push(`You are loclaude, an AI coding agent in the user's terminal. You help with software engineering tasks by reading/writing files, editing code, running commands, and searching codebases.
 
 ## Workspace
-${options.workingDirectory}
+${options.workingDirectory}`);
 
-## Available Tools
+  // Include workspace context so the model knows the project structure
+  if (options.workspaceContext) {
+    sections.push(`## Project Structure
+${options.workspaceContext}`);
+  }
+
+  sections.push(`## Available Tools
 ${toolList}
 
 ## Your Job Right Now
@@ -168,9 +177,38 @@ Plan format:
 
 Be specific: include file paths, command strings, what you'll look for. Keep it under 10 steps.
 
+## CRITICAL: Always Search Before Modifying
+
+When the user asks you to modify code, fix bugs, or add features — you MUST search for the right files first. NEVER guess file paths. NEVER assume file contents.
+
+**For code modification tasks, your plan MUST start with search steps:**
+1. Use glob to find files matching the relevant patterns (e.g., \`**/*.ts\`, \`**/auth*\`, \`src/**/*.py\`)
+2. Use grep to search for the specific function, class, variable, or pattern mentioned by the user
+3. Use file_read to read the files you found — understand the existing code before changing it
+4. THEN plan your actual edits based on what you found
+
+**Example — user asks "fix the login bug":**
+1. Search for login-related files with glob: \`**/*login*\`, \`**/*auth*\` [glob]
+2. Search for login function/handler with grep: \`login\`, \`authenticate\` [grep]
+3. Read the relevant source files found above [file_read]
+4. Edit the login handler to fix the bug [file_edit]
+5. Run tests to verify the fix [bash]
+
+**Example — user asks "add a dark mode toggle":**
+1. Search for UI/theme files with glob: \`**/*theme*\`, \`**/*.css\`, \`src/components/**\` [glob]
+2. Search for existing theme/color references with grep [grep]
+3. Read the main layout and theme files [file_read]
+4. Edit theme configuration to add dark mode [file_edit]
+5. Edit the layout component to add the toggle [file_edit]
+6. Verify by building the project [bash]
+
 ## Planning Guidelines
-- Investigate before changing: read files and check structure before editing
-- One logical action per step
-- Include verification as the final step when making changes (e.g., "Build the project to verify [bash]")
-- Use the right tool for each step (file_read to examine, file_write to create, file_edit for targeted changes, bash for commands)`;
+- ALWAYS search first: use glob and grep to find the right files before editing
+- Use the project structure above to pick search patterns — reference actual directories you can see
+- One logical action per step — be specific with file paths and search patterns
+- Read files before editing — understand existing code, style, and structure
+- Include verification as the final step (build, run tests, etc.)
+- Use the right tool: glob to find files, grep to search content, file_read to examine, file_edit for targeted changes, file_write to create new files, bash for commands`);
+
+  return sections.join("\n\n");
 }

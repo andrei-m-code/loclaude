@@ -53,6 +53,7 @@ export interface AgentConfig {
   systemPrompt: string;
   baseUrl: string;
   workingDirectory: string;
+  workspaceContext?: string;
   temperature?: number;
   maxTokens?: number;
   maxTurns?: number;
@@ -98,6 +99,7 @@ export class Agent {
     const planningPrompt = buildPlanningPrompt({
       tools: this.toolRegistry.getToolDefinitions(),
       workingDirectory: this.config.workingDirectory,
+      workspaceContext: this.config.workspaceContext,
     });
 
     let planText = "";

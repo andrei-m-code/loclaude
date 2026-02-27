@@ -59,6 +59,7 @@ async function main() {
       systemPrompt,
       baseUrl: config.provider.baseUrl,
       workingDirectory: process.cwd(),
+      workspaceContext,
       temperature: config.provider.temperature,
       maxTokens: config.provider.maxTokens,
       maxTurns: config.agent.maxToolTurns,
