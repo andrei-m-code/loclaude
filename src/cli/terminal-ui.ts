@@ -2,13 +2,25 @@ import chalk from "chalk";
 
 const ESC = "\x1b";
 
+// Box-drawing characters
+const BOX = {
+  topLeft: "┌",
+  topRight: "┐",
+  bottomLeft: "└",
+  bottomRight: "┘",
+  horizontal: "─",
+  vertical: "│",
+};
+
 /**
- * Terminal UI with a scrolling output area and fixed input bar at the bottom.
+ * Terminal UI with a scrolling output area and fixed bordered input box at the bottom.
  *
  * Layout:
- *   Row 1..H-2  — Scroll region (output from agent, tool calls, etc.)
- *   Row H-1     — Status line (spinner + status text)
- *   Row H       — Input line ("> " prompt + user input + cursor)
+ *   Row 1..H-4  — Scroll region (output from agent, tool calls, etc.)
+ *   Row H-3     — Status line (spinner + status text)
+ *   Row H-2     — ┌──────────────────────────┐
+ *   Row H-1     — │ > user input█            │
+ *   Row H       — └──────────────────────────┘
  *
  * Uses alternate screen buffer so the user's terminal is restored on exit.
  */
@@ -23,6 +35,9 @@ export class TerminalUI {
   private spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   private spinnerIdx = 0;
   private spinnerTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Bottom bar height: status + 3 lines for bordered input box
+  private static BOTTOM_HEIGHT = 4;
 
   // Callbacks
   private onSubmit: (input: string) => void;
@@ -76,7 +91,6 @@ export class TerminalUI {
 
   /** Write text into the scrolling output area. Supports partial writes (streaming). */
   write(text: string): void {
-    // Cursor is in the scroll region — just write. Auto-scrolls when it hits the bottom.
     this.raw(text);
   }
 
@@ -90,7 +104,7 @@ export class TerminalUI {
     this.statusText = text;
     this.spinnerIdx = 0;
     this.drawStatusLine();
-    this.stopSpinner(); // clear any existing timer
+    this.stopSpinner();
     this.spinnerTimer = setInterval(() => {
       this.spinnerIdx = (this.spinnerIdx + 1) % this.spinnerFrames.length;
       this.drawStatusLine();
@@ -120,16 +134,14 @@ export class TerminalUI {
   // ── Private ──────────────────────────────────────────────
 
   private applyScrollRegion(): void {
-    const scrollEnd = Math.max(1, this.rows - 2);
+    const scrollEnd = Math.max(1, this.rows - TerminalUI.BOTTOM_HEIGHT);
     this.raw(`${ESC}[1;${scrollEnd}r`);
   }
 
   private drawBottomBar(): void {
-    // Save cursor position (inside scroll region)
     this.raw(`${ESC}7`);
     this.drawStatusLine_raw();
-    this.drawInputLine_raw();
-    // Restore cursor back to scroll region
+    this.drawInputBox_raw();
     this.raw(`${ESC}8`);
   }
 
@@ -139,15 +151,15 @@ export class TerminalUI {
     this.raw(`${ESC}8`);
   }
 
-  private drawInputLine(): void {
+  private drawInputBox(): void {
     this.raw(`${ESC}7`);
-    this.drawInputLine_raw();
+    this.drawInputBox_raw();
     this.raw(`${ESC}8`);
   }
 
-  /** Write status line at row H-1. Caller must save/restore cursor. */
+  /** Write status line. Caller must save/restore cursor. */
   private drawStatusLine_raw(): void {
-    const row = this.rows - 1;
+    const row = this.rows - 3;
     this.raw(`${ESC}[${row};1H${ESC}[2K`);
     if (this.statusText) {
       const frame = this.spinnerTimer ? this.spinnerFrames[this.spinnerIdx] : "●";
@@ -155,11 +167,39 @@ export class TerminalUI {
     }
   }
 
-  /** Write input line at row H. Caller must save/restore cursor. */
-  private drawInputLine_raw(): void {
-    const row = this.rows;
-    this.raw(`${ESC}[${row};1H${ESC}[2K`);
-    this.raw(chalk.bold.green("> ") + this.inputBuffer + chalk.dim("█"));
+  /** Write the bordered input box (3 rows). Caller must save/restore cursor. */
+  private drawInputBox_raw(): void {
+    const w = this.cols;
+    const innerW = Math.max(1, w - 2); // width inside the box
+
+    // Top border — row H-2
+    const topRow = this.rows - 2;
+    this.raw(`${ESC}[${topRow};1H${ESC}[2K`);
+    this.raw(chalk.dim(BOX.topLeft + BOX.horizontal.repeat(innerW) + BOX.topRight));
+
+    // Input content — row H-1
+    const midRow = this.rows - 1;
+    this.raw(`${ESC}[${midRow};1H${ESC}[2K`);
+    const cursor = this.running ? " " : "█";
+    const content = this.inputBuffer + cursor;
+    // Visible space: innerW minus 2 for "> " prompt
+    const maxContent = Math.max(0, innerW - 2);
+    const visible = content.length > maxContent
+      ? content.slice(content.length - maxContent)
+      : content;
+    const padding = Math.max(0, maxContent - visible.length);
+    this.raw(
+      chalk.dim(BOX.vertical) +
+        chalk.bold.green("> ") +
+        visible +
+        " ".repeat(padding) +
+        chalk.dim(BOX.vertical),
+    );
+
+    // Bottom border — row H
+    const botRow = this.rows;
+    this.raw(`${ESC}[${botRow};1H${ESC}[2K`);
+    this.raw(chalk.dim(BOX.bottomLeft + BOX.horizontal.repeat(innerW) + BOX.bottomRight));
   }
 
   private onKeypress = (data: string): void => {
@@ -173,7 +213,7 @@ export class TerminalUI {
         // Enter
         const text = this.inputBuffer;
         this.inputBuffer = "";
-        this.drawInputLine();
+        this.drawInputBox();
         if (text.trim()) {
           this.onSubmit(text.trim());
         }
@@ -181,13 +221,17 @@ export class TerminalUI {
         // Backspace
         if (this.inputBuffer.length > 0) {
           this.inputBuffer = this.inputBuffer.slice(0, -1);
-          this.drawInputLine();
+          this.drawInputBox();
         }
       } else if (code === 3) {
         // Ctrl+C
         this.onInterrupt();
       } else if (code === 4) {
         // Ctrl+D — exit
+        this.stop();
+        process.exit(0);
+      } else if (code === 26) {
+        // Ctrl+Z — suspend / exit to regular terminal
         this.stop();
         process.exit(0);
       } else if (code === 12) {
@@ -198,10 +242,9 @@ export class TerminalUI {
         this.drawBottomBar();
         this.raw(`${ESC}[1;1H`);
       } else if (code >= 32) {
-        // Don't accept typing while agent is running (except the above controls)
         if (!this.running) {
           this.inputBuffer += ch;
-          this.drawInputLine();
+          this.drawInputBox();
         }
       }
     }
