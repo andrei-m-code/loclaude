@@ -1,0 +1,94 @@
+import { z } from "zod";
+import * as fs from "node:fs/promises";
+import * as path from "node:path";
+import * as os from "node:os";
+import { BaseTool, type ToolResult } from "./types.js";
+
+const PROTECTED_PATHS = new Set([
+  "/",
+  "/etc",
+  "/usr",
+  "/bin",
+  "/sbin",
+  "/var",
+  "/sys",
+  "/proc",
+  "/dev",
+  "/tmp",
+  "/boot",
+  "/lib",
+  "/opt",
+  os.homedir(),
+]);
+
+const inputSchema = z.object({
+  file_path: z.string().describe("Absolute path to the file or empty directory to delete"),
+});
+
+type FileDeleteInput = z.infer<typeof inputSchema>;
+
+export class FileDeleteTool extends BaseTool<FileDeleteInput> {
+  readonly name = "file_delete";
+  readonly description =
+    "Delete a file or empty directory. Cannot delete non-empty directories (use bash with rm -rf for that). The file_path must be an absolute path.";
+  readonly inputSchema = inputSchema;
+
+  async execute(input: FileDeleteInput): Promise<ToolResult> {
+    const filePath = path.resolve(input.file_path);
+
+    if (!path.isAbsolute(input.file_path)) {
+      return { output: `Error: file_path must be an absolute path, got: ${input.file_path}` };
+    }
+
+    // Protected path check
+    if (PROTECTED_PATHS.has(filePath)) {
+      return { output: `Error: Cannot delete protected path: ${filePath}` };
+    }
+
+    // Check existence
+    let stat: Awaited<ReturnType<typeof fs.lstat>>;
+    try {
+      stat = await fs.lstat(filePath);
+    } catch {
+      return { output: `Error: Path not found: ${filePath}` };
+    }
+
+    if (stat.isDirectory()) {
+      // Only delete empty directories
+      try {
+        const entries = await fs.readdir(filePath);
+        if (entries.length > 0) {
+          return {
+            output: `Error: Directory is not empty (${entries.length} items): ${filePath}\nUse the bash tool with 'rm -rf' if you need to delete a non-empty directory.`,
+          };
+        }
+        await fs.rmdir(filePath);
+        return { output: `Deleted empty directory: ${filePath}` };
+      } catch (err) {
+        const msg = err instanceof Error ? err.message : String(err);
+        return { output: `Error deleting directory: ${msg}` };
+      }
+    }
+
+    // Delete file (or symlink)
+    const size = stat.size;
+    const isSymlink = stat.isSymbolicLink();
+    try {
+      await fs.unlink(filePath);
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      if (msg.includes("EACCES")) {
+        return { output: `Error: Permission denied: ${filePath}` };
+      }
+      return { output: `Error deleting file: ${msg}` };
+    }
+
+    if (isSymlink) {
+      return { output: `Deleted symlink: ${filePath}` };
+    }
+    return {
+      output: `Deleted ${filePath} (${size} bytes)`,
+      metadata: { filePath, size },
+    };
+  }
+}

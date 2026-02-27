@@ -2,7 +2,13 @@ import { loadConfig } from "./config/index.js";
 import { createProvider } from "./providers/factory.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { FileReadTool } from "./tools/file-read.js";
+import { FileWriteTool } from "./tools/file-write.js";
+import { FileEditTool } from "./tools/file-edit.js";
+import { FileDeleteTool } from "./tools/file-delete.js";
+import { GlobTool } from "./tools/glob.js";
+import { GrepTool } from "./tools/grep.js";
 import { BashTool } from "./tools/bash.js";
+import { HttpRequestTool } from "./tools/http-request.js";
 import { buildSystemPrompt } from "./agent/system-prompt.js";
 import { Agent } from "./agent/agent.js";
 import { startRepl } from "./cli/repl.js";
@@ -22,7 +28,13 @@ async function main() {
   // 3. Create tool registry
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(new FileReadTool());
+  toolRegistry.register(new FileWriteTool());
+  toolRegistry.register(new FileEditTool());
+  toolRegistry.register(new FileDeleteTool());
+  toolRegistry.register(new GlobTool());
+  toolRegistry.register(new GrepTool());
   toolRegistry.register(new BashTool(process.cwd()));
+  toolRegistry.register(new HttpRequestTool());
 
   // 4. Build system prompt
   const systemPrompt = buildSystemPrompt({
