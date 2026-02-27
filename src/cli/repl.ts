@@ -75,6 +75,49 @@ export async function startRepl(options: ReplOptions): Promise<never> {
         if (!running) break;
 
         switch (event.type) {
+          case "phase_start":
+            ui.stopInlineSpinner();
+            ui.stopSpinner();
+            renderer.renderPhaseStart(event.phase);
+            if (event.phase === "plan") {
+              ui.startSpinner("Planning...");
+            } else if (event.phase === "verify") {
+              ui.startSpinner("Verifying...");
+            }
+            break;
+
+          case "phase_end":
+            ui.stopSpinner();
+            renderer.renderPhaseEnd(event.phase);
+            break;
+
+          case "plan_ready":
+            ui.stopSpinner();
+            renderer.renderPlan(event.plan);
+            break;
+
+          case "step_start":
+            renderer.renderStepStart(event.stepNumber, event.totalSteps, event.description);
+            ui.startSpinner(`Step ${event.stepNumber}/${event.totalSteps}...`);
+            firstTextChunk = true;
+            ui.startInlineSpinner();
+            break;
+
+          case "step_end":
+            ui.stopInlineSpinner();
+            ui.stopSpinner();
+            if (!firstTextChunk) {
+              ui.writeLine(""); // newline after streamed text
+            }
+            renderer.renderStepEnd(event.stepNumber, event.success);
+            firstTextChunk = true;
+            break;
+
+          case "verify_result":
+            ui.stopSpinner();
+            renderer.renderVerification(event.result);
+            break;
+
           case "text_delta":
             if (firstTextChunk) {
               ui.stopInlineSpinner();

@@ -40,6 +40,7 @@ async function main() {
       model: config.provider.model,
       systemPrompt,
       baseUrl: config.provider.baseUrl,
+      workingDirectory: process.cwd(),
       temperature: config.provider.temperature,
       maxTokens: config.provider.maxTokens,
       maxTurns: config.agent.maxToolTurns,
