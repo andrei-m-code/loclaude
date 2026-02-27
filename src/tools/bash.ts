@@ -146,11 +146,17 @@ export class BashTool extends BaseTool<BashInput> {
   readonly inputSchema = inputSchema;
 
   private workspaceRoot: string;
+  private currentDir: string;
   private activeProcesses: Set<ChildProcess> = new Set();
 
   constructor(workspaceRoot?: string) {
     super();
     this.workspaceRoot = workspaceRoot ?? process.cwd();
+    this.currentDir = this.workspaceRoot;
+  }
+
+  getCurrentDir(): string {
+    return this.currentDir;
   }
 
   async execute(input: BashInput): Promise<ToolResult> {
@@ -162,6 +168,7 @@ export class BashTool extends BaseTool<BashInput> {
 
     const timeout = input.timeout ?? DEFAULT_TIMEOUT;
     const shell = process.env.SHELL || "/bin/sh";
+    const cwd = input.working_directory ?? this.currentDir;
 
     return new Promise<ToolResult>((resolve) => {
       let output = "";
@@ -169,7 +176,7 @@ export class BashTool extends BaseTool<BashInput> {
       let timedOut = false;
 
       const proc = spawn(shell, ["-c", input.command], {
-        cwd: input.working_directory,
+        cwd,
         stdio: ["ignore", "pipe", "pipe"],
         env: {
           ...process.env,
@@ -210,6 +217,11 @@ export class BashTool extends BaseTool<BashInput> {
         clearTimeout(timer);
         this.activeProcesses.delete(proc);
 
+        // Track directory changes from cd commands
+        if (exitCode === 0) {
+          this.updateCurrentDirFromCommand(input.command, cwd);
+        }
+
         let result = `$ ${input.command}\n\n${output}`;
         if (truncated) {
           result += "\n... (output truncated)";
@@ -235,5 +247,39 @@ export class BashTool extends BaseTool<BashInput> {
       proc.kill("SIGTERM");
     }
     this.activeProcesses.clear();
+  }
+
+  /**
+   * Detect cd commands and update the tracked current directory.
+   * Handles: "cd dir", "cd dir && ...", "... && cd dir", "cd dir; ..."
+   * Only updates if the resolved path is within the workspace.
+   */
+  private updateCurrentDirFromCommand(command: string, cwd: string): void {
+    // Find the last cd target in the command chain
+    const cdRegex = /(?:^|&&\s*|;\s*)cd\s+(?:"([^"]+)"|'([^']+)'|(~|[^\s;&|]+))/g;
+    let lastCdTarget: string | null = null;
+    let match: RegExpExecArray | null;
+
+    while ((match = cdRegex.exec(command)) !== null) {
+      lastCdTarget = match[1] ?? match[2] ?? match[3] ?? null;
+    }
+
+    if (!lastCdTarget) return;
+
+    // Handle ~ as home directory
+    if (lastCdTarget === "~" || lastCdTarget.startsWith("~/")) {
+      // Don't track cd to home — likely outside workspace
+      return;
+    }
+
+    // Handle "cd -" — can't know previous dir, skip
+    if (lastCdTarget === "-") return;
+
+    const newDir = path.resolve(cwd, lastCdTarget);
+
+    // Only update if within workspace bounds
+    if (newDir === this.workspaceRoot || newDir.startsWith(this.workspaceRoot + path.sep)) {
+      this.currentDir = newDir;
+    }
   }
 }

@@ -77,8 +77,9 @@ export async function startRepl(options: ReplOptions): Promise<never> {
     ui.startSpinner("Thinking...");
     ui.writeLine(""); // blank line before response
 
+    const requestStart = Date.now();
     let firstTextChunk = true;
-    ui.startInlineSpinner();
+    ui.startInlineSpinner(requestStart);
 
     try {
       for await (const event of agent.run(text)) {
@@ -120,7 +121,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             renderer.renderToolResult(event.toolName, event.result, event.isError);
             ui.startSpinner("Thinking...");
             firstTextChunk = true;
-            ui.startInlineSpinner();
+            ui.startInlineSpinner(requestStart);
             break;
 
           case "usage":
@@ -143,7 +144,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             renderer.renderStepStart(event.stepNumber, event.totalSteps, event.description);
             ui.startSpinner(`Step ${event.stepNumber}/${event.totalSteps}...`);
             firstTextChunk = true;
-            ui.startInlineSpinner();
+            ui.startInlineSpinner(requestStart);
             break;
 
           case "step_end":
@@ -176,6 +177,10 @@ export async function startRepl(options: ReplOptions): Promise<never> {
     if (!firstTextChunk) {
       ui.writeLine("");
     }
+    // Report elapsed time
+    const elapsed = (Date.now() - requestStart) / 1000;
+    const timeStr = elapsed < 100 ? elapsed.toFixed(1) + "s" : Math.floor(elapsed) + "s";
+    ui.writeLine(chalk.dim(`  Done in ${timeStr}`));
     ui.writeLine(""); // blank line after response
     ui.stopSpinner();
     // Restore persistent status with token counts

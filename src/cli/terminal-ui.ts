@@ -142,11 +142,12 @@ export class TerminalUI {
     this.running = value;
   }
 
-  /** Start an inline spinner at the current cursor position in the scroll region. */
-  startInlineSpinner(): void {
+  /** Start an inline spinner at the current cursor position in the scroll region.
+   *  If startTime is provided, the elapsed timer continues from that point instead of resetting. */
+  startInlineSpinner(startTime?: number): void {
     this.stopInlineSpinner();
     this.inlineSpinnerIdx = 0;
-    this.inlineSpinnerStart = Date.now();
+    this.inlineSpinnerStart = startTime ?? Date.now();
     const bs = "\b".repeat(this.inlineFrameWidth);
     // Hide cursor so no block/rectangle appears next to the spinner
     this.raw(`${ESC}[?25l`);
