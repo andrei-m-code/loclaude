@@ -177,6 +177,14 @@ export class Agent {
     return this.toolCallMode;
   }
 
+  getCurrentDir(): string {
+    const bash = this.toolRegistry.getTool("bash");
+    if (bash && typeof (bash as unknown as { getCurrentDir?: unknown }).getCurrentDir === "function") {
+      return (bash as unknown as { getCurrentDir(): string }).getCurrentDir();
+    }
+    return this.config.workingDirectory;
+  }
+
   reset(): void {
     this.conversation.clear();
   }

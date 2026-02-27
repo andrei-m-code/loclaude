@@ -26,6 +26,13 @@ export async function startRepl(options: ReplOptions): Promise<never> {
   let totalIn = 0;
   let totalOut = 0;
 
+  function buildStatusText(): string {
+    const currentDir = agent.getCurrentDir();
+    const relative = path.relative(options.workingDirectory, currentDir);
+    const displayDir = relative ? `${folderName}/${relative}` : folderName;
+    return `${agent.getModel()} | ${displayDir} | in:${formatTokens(totalIn)} out:${formatTokens(totalOut)}`;
+  }
+
   const ui = new TerminalUI({
     onSubmit: (text) => {
       handleSubmit(text).catch((err) => {
@@ -126,7 +133,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
           case "usage":
             totalIn += event.promptTokens;
             totalOut += event.completionTokens;
-            ui.setStatus(`${agent.getModel()} | ${folderName} | in:${formatTokens(totalIn)} out:${formatTokens(totalOut)}`);
+            ui.setStatus(buildStatusText());
             break;
 
           case "turn_complete":
@@ -182,9 +189,9 @@ export async function startRepl(options: ReplOptions): Promise<never> {
     ui.writeLine(chalk.dim(`  Done in ${timeStr}`));
     ui.writeLine(""); // blank line after response
     ui.stopSpinner();
-    // Restore persistent status with token counts
+    // Restore persistent status with token counts and current dir
     if (totalIn > 0 || totalOut > 0) {
-      ui.setStatus(`${agent.getModel()} | ${folderName} | in:${formatTokens(totalIn)} out:${formatTokens(totalOut)}`);
+      ui.setStatus(buildStatusText());
     }
     ui.setRunning(false);
     running = false;

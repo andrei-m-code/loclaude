@@ -9,6 +9,7 @@ import { GlobTool } from "./tools/glob.js";
 import { GrepTool } from "./tools/grep.js";
 import { ListDirectoryTool } from "./tools/list-directory.js";
 import { BashTool } from "./tools/bash.js";
+import { ChangeDirectoryTool } from "./tools/change-directory.js";
 import { HttpRequestTool } from "./tools/http-request.js";
 import { buildSystemPrompt } from "./agent/system-prompt.js";
 import { scanWorkspace } from "./agent/workspace-scan.js";
@@ -37,7 +38,9 @@ async function main() {
   toolRegistry.register(new GlobTool());
   toolRegistry.register(new GrepTool());
   toolRegistry.register(new ListDirectoryTool());
-  toolRegistry.register(new BashTool(cwd));
+  const bashTool = new BashTool(cwd);
+  toolRegistry.register(bashTool);
+  toolRegistry.register(new ChangeDirectoryTool(bashTool, cwd));
   toolRegistry.register(new HttpRequestTool());
 
   // 4. Scan workspace and build system prompt
