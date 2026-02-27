@@ -250,39 +250,30 @@ export class TerminalUI {
     this.raw(`${ESC}8`);
   }
 
-  /** Write the bordered input box (3 rows). Caller must save/restore cursor. */
+  /** Write the input area (3 rows: top rule, input, bottom rule). Caller must save/restore cursor. */
   private drawInputBox_raw(): void {
     const w = this.cols;
-    const innerW = Math.max(1, w - 2); // width inside the box
 
-    // Top border — row H-3
+    // Top rule — row H-3
     const topRow = this.rows - 3;
     this.raw(`${ESC}[${topRow};1H${ESC}[2K`);
-    this.raw(chalk.dim(BOX.topLeft + BOX.horizontal.repeat(innerW) + BOX.topRight));
+    this.raw(chalk.dim(BOX.horizontal.repeat(w)));
 
     // Input content — row H-2
     const midRow = this.rows - 2;
     this.raw(`${ESC}[${midRow};1H${ESC}[2K`);
     const cursor = this.running ? " " : "█";
     const content = this.inputBuffer + cursor;
-    // Visible space: innerW minus 2 for "> " prompt
-    const maxContent = Math.max(0, innerW - 2);
+    const maxContent = Math.max(0, w - 2); // space for "> " prompt
     const visible = content.length > maxContent
       ? content.slice(content.length - maxContent)
       : content;
-    const padding = Math.max(0, maxContent - visible.length);
-    this.raw(
-      chalk.dim(BOX.vertical) +
-        chalk.bold.green("> ") +
-        visible +
-        " ".repeat(padding) +
-        chalk.dim(BOX.vertical),
-    );
+    this.raw(chalk.bold.green("> ") + visible);
 
-    // Bottom border — row H-1
+    // Bottom rule — row H-1
     const botRow = this.rows - 1;
     this.raw(`${ESC}[${botRow};1H${ESC}[2K`);
-    this.raw(chalk.dim(BOX.bottomLeft + BOX.horizontal.repeat(innerW) + BOX.bottomRight));
+    this.raw(chalk.dim(BOX.horizontal.repeat(w)));
   }
 
   /** Write status line below the input box. Caller must save/restore cursor. */
