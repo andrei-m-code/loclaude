@@ -68,21 +68,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
     ui.writeLine(""); // blank line before response
 
     let firstTextChunk = true;
-
-    // Delayed inline spinner — shows in the output area after 3 seconds
-    const INLINE_SPINNER_DELAY = 3000;
-    let inlineSpinnerTimeout: ReturnType<typeof setTimeout> | null = setTimeout(() => {
-      ui.startInlineSpinner();
-      inlineSpinnerTimeout = null;
-    }, INLINE_SPINNER_DELAY);
-
-    const clearInlineWait = (): void => {
-      if (inlineSpinnerTimeout) {
-        clearTimeout(inlineSpinnerTimeout);
-        inlineSpinnerTimeout = null;
-      }
-      ui.stopInlineSpinner();
-    };
+    ui.startInlineSpinner();
 
     try {
       for await (const event of agent.run(text)) {
@@ -91,7 +77,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
         switch (event.type) {
           case "text_delta":
             if (firstTextChunk) {
-              clearInlineWait();
+              ui.stopInlineSpinner();
               ui.stopSpinner();
               firstTextChunk = false;
             }
@@ -110,7 +96,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
 
           case "tool_call_ready":
             // Show tool call in output
-            clearInlineWait();
+            ui.stopInlineSpinner();
             if (!firstTextChunk) {
               ui.writeLine(""); // newline after streamed text
             }
@@ -124,11 +110,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             renderer.renderToolResult(event.toolName, event.result, event.isError);
             ui.startSpinner("Thinking...");
             firstTextChunk = true;
-            // Restart delayed inline spinner for the next thinking phase
-            inlineSpinnerTimeout = setTimeout(() => {
-              ui.startInlineSpinner();
-              inlineSpinnerTimeout = null;
-            }, INLINE_SPINNER_DELAY);
+            ui.startInlineSpinner();
             break;
 
           case "turn_complete":
@@ -138,7 +120,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             break;
 
           case "error":
-            clearInlineWait();
+            ui.stopInlineSpinner();
             ui.stopSpinner();
             renderer.renderError(event.error);
             break;
@@ -149,13 +131,13 @@ export async function startRepl(options: ReplOptions): Promise<never> {
         }
       }
     } catch (err) {
-      clearInlineWait();
+      ui.stopInlineSpinner();
       ui.stopSpinner();
       renderer.renderError(err instanceof Error ? err : new Error(String(err)));
     }
 
     // Ensure we end on a new line
-    clearInlineWait();
+    ui.stopInlineSpinner();
     if (!firstTextChunk) {
       ui.writeLine("");
     }

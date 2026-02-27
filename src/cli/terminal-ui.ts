@@ -39,7 +39,8 @@ export class TerminalUI {
   // Inline spinner (in scroll region, where text will appear)
   private inlineSpinnerTimer: ReturnType<typeof setInterval> | null = null;
   private inlineSpinnerIdx = 0;
-  private inlineFrameWidth = 5; // visible chars: "⠋ ▰▱▱"
+  private inlineSpinnerStart = 0;
+  private inlineFrameWidth = 9; // visible chars: "▰▱▱  0.0s"
 
   // Bottom bar height: status + 3 lines for bordered input box
   private static BOTTOM_HEIGHT = 4;
@@ -141,6 +142,7 @@ export class TerminalUI {
   startInlineSpinner(): void {
     this.stopInlineSpinner();
     this.inlineSpinnerIdx = 0;
+    this.inlineSpinnerStart = Date.now();
     const bs = "\b".repeat(this.inlineFrameWidth);
     // Write first frame immediately
     this.raw(this.getInlineFrame(0) + bs);
@@ -162,41 +164,41 @@ export class TerminalUI {
     }
   }
 
-  /** Build a single inline spinner frame — cycling color pulse. */
+  /** Build a single inline spinner frame — color-cycling pulse bar + elapsed time. */
   private getInlineFrame(idx: number): string {
+    // Elapsed time (fixed 5-char width)
+    const elapsed = (Date.now() - this.inlineSpinnerStart) / 1000;
+    const timeStr = elapsed < 100
+      ? elapsed.toFixed(1) + "s"
+      : Math.floor(elapsed) + "s";
+    const timePart = chalk.dim(timeStr.padStart(5));
+
+    // Color-cycling bar (3 chars)
     const bar = (filled: number, color: (s: string) => string): string => {
       const on = "▰".repeat(filled);
       const off = "▱".repeat(3 - filled);
-      return filled === 3
-        ? color(on)
-        : color(on) + chalk.dim(off);
+      return filled === 3 ? color(on) : color(on) + chalk.dim(off);
     };
 
-    const braille = this.spinnerFrames;
-    const b = braille[idx % braille.length];
-
-    // 12-frame cycle: green pulse → cyan peak → magenta pulse → dim rest
     const phase = idx % 12;
+    let barStr: string;
     switch (phase) {
-      // Green builds up
-      case 0:  return chalk.green(b) + " " + bar(1, chalk.green);
-      case 1:  return chalk.green(b) + " " + bar(2, chalk.green);
-      case 2:  return chalk.greenBright(b) + " " + bar(3, chalk.greenBright);
-      // Cyan peak + fade
-      case 3:  return chalk.cyanBright(b) + " " + bar(3, chalk.cyanBright);
-      case 4:  return chalk.cyan(b) + " " + bar(2, chalk.cyan);
-      case 5:  return chalk.cyan(b) + " " + bar(1, chalk.cyan);
-      // Dim rest
-      case 6:  return chalk.dim(b) + " " + chalk.dim("▱▱▱");
-      // Magenta builds up
-      case 7:  return chalk.magenta(b) + " " + bar(1, chalk.magenta);
-      case 8:  return chalk.magenta(b) + " " + bar(2, chalk.magenta);
-      case 9:  return chalk.magentaBright(b) + " " + bar(3, chalk.magentaBright);
-      // Magenta fade
-      case 10: return chalk.magenta(b) + " " + bar(2, chalk.magenta);
-      case 11: return chalk.dim(b) + " " + chalk.dim("▱▱▱");
-      default: return chalk.dim(b) + " " + chalk.dim("▱▱▱");
+      case 0:  barStr = bar(1, chalk.green); break;
+      case 1:  barStr = bar(2, chalk.green); break;
+      case 2:  barStr = bar(3, chalk.greenBright); break;
+      case 3:  barStr = bar(3, chalk.cyanBright); break;
+      case 4:  barStr = bar(2, chalk.cyan); break;
+      case 5:  barStr = bar(1, chalk.cyan); break;
+      case 6:  barStr = chalk.dim("▱▱▱"); break;
+      case 7:  barStr = bar(1, chalk.magenta); break;
+      case 8:  barStr = bar(2, chalk.magenta); break;
+      case 9:  barStr = bar(3, chalk.magentaBright); break;
+      case 10: barStr = bar(2, chalk.magenta); break;
+      case 11: barStr = chalk.dim("▱▱▱"); break;
+      default: barStr = chalk.dim("▱▱▱"); break;
     }
+
+    return barStr + " " + timePart;
   }
 
   // ── Private ──────────────────────────────────────────────
