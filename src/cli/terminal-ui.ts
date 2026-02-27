@@ -112,6 +112,8 @@ export class TerminalUI {
     this.spinnerIdx = 0;
     this.drawStatusLine();
     this.stopSpinner();
+    // Hide cursor during spinner animation
+    this.raw(`${ESC}[?25l`);
     this.spinnerTimer = setInterval(() => {
       this.spinnerIdx = (this.spinnerIdx + 1) % this.spinnerFrames.length;
       this.drawStatusLine();
@@ -123,6 +125,8 @@ export class TerminalUI {
     if (this.spinnerTimer) {
       clearInterval(this.spinnerTimer);
       this.spinnerTimer = null;
+      // Show cursor again
+      this.raw(`${ESC}[?25h`);
     }
     this.statusText = "";
     this.drawStatusLine();
@@ -144,6 +148,8 @@ export class TerminalUI {
     this.inlineSpinnerIdx = 0;
     this.inlineSpinnerStart = Date.now();
     const bs = "\b".repeat(this.inlineFrameWidth);
+    // Hide cursor so no block/rectangle appears next to the spinner
+    this.raw(`${ESC}[?25l`);
     // Write first frame immediately
     this.raw(this.getInlineFrame(0) + bs);
     this.inlineSpinnerTimer = setInterval(() => {
@@ -161,6 +167,8 @@ export class TerminalUI {
       const blank = " ".repeat(this.inlineFrameWidth);
       const bs = "\b".repeat(this.inlineFrameWidth);
       this.raw(blank + bs);
+      // Show cursor again
+      this.raw(`${ESC}[?25h`);
     }
   }
 
