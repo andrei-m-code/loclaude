@@ -142,6 +142,20 @@ export class TerminalUI {
     this.running = value;
   }
 
+  /**
+   * Ensure the UI is ready for user input.
+   * Stops all spinners, shows cursor, and redraws the input box.
+   * Call this after setRunning(false) to guarantee clean state.
+   */
+  ensureInputReady(): void {
+    this.stopInlineSpinner();
+    this.stopSpinner();
+    // Always show cursor — stopInlineSpinner/stopSpinner only show it
+    // when their timer was active, which is a no-op if already stopped.
+    this.raw(`${ESC}[?25h`);
+    this.drawInputBox();
+  }
+
   /** Start an inline spinner at the current cursor position in the scroll region.
    *  If startTime is provided, the elapsed timer continues from that point instead of resetting. */
   startInlineSpinner(startTime?: number): void {

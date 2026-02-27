@@ -29,20 +29,19 @@ export async function startRepl(options: ReplOptions): Promise<never> {
   const ui = new TerminalUI({
     onSubmit: (text) => {
       handleSubmit(text).catch((err) => {
-        ui.stopSpinner();
         ui.setRunning(false);
         running = false;
+        ui.ensureInputReady();
         renderer.renderError(err instanceof Error ? err : new Error(String(err)));
       });
     },
     onInterrupt: () => {
       if (running) {
         // TODO: abort the agent run via AbortController
-        ui.stopInlineSpinner();
         ui.writeLine(chalk.yellow("[Cancelled]"));
-        ui.stopSpinner();
         ui.setRunning(false);
         running = false;
+        ui.ensureInputReady();
       } else {
         ui.stop();
         console.log("Goodbye!");
@@ -189,6 +188,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
     }
     ui.setRunning(false);
     running = false;
+    ui.ensureInputReady();
   }
 
   // Block forever — process exits via Ctrl+C/Ctrl+D or /exit
