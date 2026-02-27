@@ -64,7 +64,6 @@ export class Renderer {
       grep: "[S]",
       list_directory: "[L]",
       bash: "[$]",
-      change_directory: "[>]",
       http_request: "[H]",
     };
     return icons[toolName] ?? "[?]";
@@ -90,8 +89,6 @@ export class Renderer {
         return String(args.pattern ?? "");
       case "list_directory":
         return String(args.path ?? ".");
-      case "change_directory":
-        return String(args.path ?? "");
       case "http_request": {
         const method = String(args.method ?? "GET").toUpperCase();
         const url = String(args.url ?? "");
