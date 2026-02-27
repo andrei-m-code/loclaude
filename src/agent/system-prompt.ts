@@ -6,6 +6,7 @@ export interface SystemPromptOptions {
   workingDirectory: string;
   providerName: string;
   modelName: string;
+  workspaceContext?: string;
 }
 
 export function buildSystemPrompt(options: SystemPromptOptions): string {
@@ -136,6 +137,15 @@ These rules are absolute. Follow them at all times.
 - Provider: ${options.providerName}
 - Model: ${options.modelName}
 - Date: ${new Date().toISOString().split("T")[0]}`);
+
+  // ── Workspace Context ──
+  if (options.workspaceContext) {
+    sections.push(`## Workspace Context
+
+The following was scanned at startup. Use this to understand the project before the user asks their first question. You do NOT need to re-read these files — you already know this.
+
+${options.workspaceContext}`);
+  }
 
   return sections.join("\n\n");
 }

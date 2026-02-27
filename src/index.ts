@@ -10,6 +10,7 @@ import { GrepTool } from "./tools/grep.js";
 import { BashTool } from "./tools/bash.js";
 import { HttpRequestTool } from "./tools/http-request.js";
 import { buildSystemPrompt } from "./agent/system-prompt.js";
+import { scanWorkspace } from "./agent/workspace-scan.js";
 import { Agent } from "./agent/agent.js";
 import { startRepl } from "./cli/repl.js";
 
@@ -37,12 +38,14 @@ async function main() {
   toolRegistry.register(new BashTool(cwd));
   toolRegistry.register(new HttpRequestTool());
 
-  // 4. Build system prompt
+  // 4. Scan workspace and build system prompt
+  const workspaceContext = await scanWorkspace(cwd);
   const systemPrompt = buildSystemPrompt({
     tools: toolRegistry.getToolDefinitions(),
-    workingDirectory: process.cwd(),
+    workingDirectory: cwd,
     providerName: provider.displayName,
     modelName: config.provider.model,
+    workspaceContext,
   });
 
   // 5. Create agent
