@@ -13,7 +13,7 @@ export function createProvider(config: ProviderConfig): LLMProvider {
     case "ollama":
       return new OllamaProvider({
         baseUrl: config.baseUrl ?? "http://localhost:11434",
-        defaultModel: config.defaultModel ?? "llama3.1",
+        defaultModel: config.defaultModel ?? "deepseek-coder:6.7b",
       });
     default:
       throw new Error(`Unknown provider: ${config.provider}. Supported: ollama`);
