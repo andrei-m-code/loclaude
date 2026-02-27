@@ -22,7 +22,7 @@ async function main() {
   // 3. Create tool registry
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(new FileReadTool());
-  toolRegistry.register(new BashTool());
+  toolRegistry.register(new BashTool(process.cwd()));
 
   // 4. Build system prompt
   const systemPrompt = buildSystemPrompt({
