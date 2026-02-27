@@ -31,10 +31,14 @@ export class TerminalUI {
   private statusText = "";
   private running = false;
 
-  // Spinner
+  // Status bar spinner
   private spinnerFrames = ["⠋", "⠙", "⠹", "⠸", "⠼", "⠴", "⠦", "⠧", "⠇", "⠏"];
   private spinnerIdx = 0;
   private spinnerTimer: ReturnType<typeof setInterval> | null = null;
+
+  // Inline spinner (in scroll region, where text will appear)
+  private inlineSpinnerTimer: ReturnType<typeof setInterval> | null = null;
+  private inlineSpinnerIdx = 0;
 
   // Bottom bar height: status + 3 lines for bordered input box
   private static BOTTOM_HEIGHT = 4;
@@ -77,6 +81,7 @@ export class TerminalUI {
 
   stop(): void {
     this.stopSpinner();
+    this.stopInlineSpinner();
     process.stdin.removeListener("data", this.onKeypress);
     process.stdout.removeListener("resize", this.onResize);
     if (process.stdin.isTTY) {
@@ -129,6 +134,29 @@ export class TerminalUI {
 
   setRunning(value: boolean): void {
     this.running = value;
+  }
+
+  /** Start an inline spinner at the current cursor position in the scroll region. */
+  startInlineSpinner(): void {
+    this.stopInlineSpinner();
+    this.inlineSpinnerIdx = 0;
+    // Write first frame immediately
+    const first = chalk.dim(this.spinnerFrames[0]);
+    this.raw(`${first}\b`);
+    this.inlineSpinnerTimer = setInterval(() => {
+      this.inlineSpinnerIdx = (this.inlineSpinnerIdx + 1) % this.spinnerFrames.length;
+      const frame = chalk.dim(this.spinnerFrames[this.inlineSpinnerIdx]);
+      this.raw(`${frame}\b`);
+    }, 80);
+  }
+
+  /** Stop the inline spinner and clear its character. */
+  stopInlineSpinner(): void {
+    if (this.inlineSpinnerTimer) {
+      clearInterval(this.inlineSpinnerTimer);
+      this.inlineSpinnerTimer = null;
+      this.raw(" \b"); // clear the spinner character
+    }
   }
 
   // ── Private ──────────────────────────────────────────────
