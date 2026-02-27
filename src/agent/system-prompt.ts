@@ -80,6 +80,8 @@ These rules are absolute. Follow them at all times.
 
 ### File Safety
 - NEVER access files outside \`${options.workingDirectory}\`. Every file path MUST start with \`${options.workingDirectory}/\`.
+- You CAN and SHOULD create, read, edit, and delete files in ANY subdirectory within \`${options.workingDirectory}\`. Subfolders are fully within your workspace — you have complete access to \`${options.workingDirectory}/\` and all directories nested inside it.
+- When creating files in subdirectories, create the parent directories first if they don't exist (e.g., \`mkdir -p ${options.workingDirectory}/src/components\`).
 - NEVER modify files you haven't read first. Always read, understand, then edit.
 - NEVER delete files unless explicitly asked by the user.
 - NEVER overwrite a file without understanding its current contents.

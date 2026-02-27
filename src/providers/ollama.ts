@@ -122,56 +122,17 @@ export class OllamaProvider implements LLMProvider {
             continue; // skip malformed lines
           }
 
-          // Handle text content
-          if (chunk.message?.content) {
-            accumulatedText += chunk.message.content;
-            yield { type: "text_delta", text: chunk.message.content };
-          }
-
-          // Handle tool calls
-          if (chunk.message?.tool_calls?.length) {
-            for (const tc of chunk.message.tool_calls) {
-              const toolCallId = this.generateToolCallId();
-              const toolCall: ToolCallContent = {
-                type: "tool_call",
-                toolCallId,
-                toolName: tc.function.name,
-                arguments: tc.function.arguments,
-              };
-              pendingToolCalls.push(toolCall);
-
-              yield {
-                type: "tool_call_start",
-                toolCallId,
-                toolName: tc.function.name,
-              };
-              yield {
-                type: "tool_call_delta",
-                toolCallId,
-                argumentsDelta: JSON.stringify(tc.function.arguments),
-              };
-              yield {
-                type: "tool_call_end",
-                toolCallId,
-                toolName: tc.function.name,
-              };
-            }
-          }
-
-          // Final chunk
-          if (chunk.done) {
-            const finishReason = pendingToolCalls.length > 0 ? "tool_calls" : "stop";
-            yield {
-              type: "done",
-              finishReason,
-              usage: {
-                promptTokens: chunk.prompt_eval_count ?? 0,
-                completionTokens: chunk.eval_count ?? 0,
-                totalTokens: (chunk.prompt_eval_count ?? 0) + (chunk.eval_count ?? 0),
-              },
-            };
-          }
+          yield* this.handleStreamChunk(chunk, accumulatedText, pendingToolCalls);
+          if (chunk.message?.content) accumulatedText += chunk.message.content;
         }
+      }
+
+      // Process any remaining data in buffer (e.g. final done chunk without trailing newline)
+      if (buffer.trim()) {
+        try {
+          const chunk = JSON.parse(buffer) as OllamaChatResponse;
+          yield* this.handleStreamChunk(chunk, accumulatedText, pendingToolCalls);
+        } catch { /* skip malformed */ }
       }
     } finally {
       reader.releaseLock();
@@ -341,6 +302,48 @@ export class OllamaProvider implements LLMProvider {
       finishReason,
       raw: data,
     };
+  }
+
+  private *handleStreamChunk(
+    chunk: OllamaChatResponse,
+    _accumulatedText: string,
+    pendingToolCalls: ToolCallContent[],
+  ): Generator<ChatStreamChunk> {
+    // Handle text content
+    if (chunk.message?.content) {
+      yield { type: "text_delta", text: chunk.message.content };
+    }
+
+    // Handle tool calls
+    if (chunk.message?.tool_calls?.length) {
+      for (const tc of chunk.message.tool_calls) {
+        const toolCallId = this.generateToolCallId();
+        pendingToolCalls.push({
+          type: "tool_call",
+          toolCallId,
+          toolName: tc.function.name,
+          arguments: tc.function.arguments,
+        });
+
+        yield { type: "tool_call_start", toolCallId, toolName: tc.function.name };
+        yield { type: "tool_call_delta", toolCallId, argumentsDelta: JSON.stringify(tc.function.arguments) };
+        yield { type: "tool_call_end", toolCallId, toolName: tc.function.name };
+      }
+    }
+
+    // Final chunk with usage stats
+    if (chunk.done) {
+      const finishReason = pendingToolCalls.length > 0 ? "tool_calls" : "stop";
+      yield {
+        type: "done",
+        finishReason,
+        usage: {
+          promptTokens: chunk.prompt_eval_count ?? 0,
+          completionTokens: chunk.eval_count ?? 0,
+          totalTokens: (chunk.prompt_eval_count ?? 0) + (chunk.eval_count ?? 0),
+        },
+      };
+    }
   }
 
   private extractText(content: MessageContent[]): string {
