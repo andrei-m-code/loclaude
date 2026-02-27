@@ -8,5 +8,6 @@ export { FileEditTool } from "./file-edit.js";
 export { FileDeleteTool } from "./file-delete.js";
 export { GlobTool } from "./glob.js";
 export { GrepTool } from "./grep.js";
+export { ListDirectoryTool } from "./list-directory.js";
 export { BashTool, validateCommand } from "./bash.js";
 export { HttpRequestTool } from "./http-request.js";

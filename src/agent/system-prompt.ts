@@ -41,6 +41,7 @@ Before doing anything, make sure you fully understand what the user is asking.
 
 ### Stage 2: INVESTIGATE
 Gather the information you need before making any changes.
+- **BEFORE creating, editing, moving, or deleting files**: Use \`list_directory\` to see what files and folders already exist. Do NOT guess at the project structure — look first. This is mandatory.
 - Read the relevant files. Read the ENTIRE file or at minimum the relevant sections — do not guess at code you haven't seen.
 - Check the project structure (list files, read config files like package.json, tsconfig.json, Makefile, etc.).
 - If the task involves modifying code, understand the existing patterns, conventions, and architecture first.
@@ -257,6 +258,17 @@ function buildToolUsageGuidelines(options: SystemPromptOptions): string {
     lines.push("- Searches file contents using regex patterns.");
     lines.push("- Use this to find where functions are defined, where variables are used, or to locate specific code patterns.");
     lines.push(`- Only search within \`${cwd}\`.`);
+  }
+
+  // ── list_directory ──
+  if (toolNames.has("list_directory")) {
+    lines.push("");
+    lines.push("### list_directory");
+    lines.push("- Lists files and directories in a tree view with file sizes.");
+    lines.push("- **MANDATORY before any file operation**: When the user asks you to create, edit, delete, move, or organize files, you MUST first use `list_directory` to see what files and folders already exist. Do NOT guess at the project structure — look first.");
+    lines.push("- Use `recursive: true` to see subdirectories up to 3 levels deep.");
+    lines.push("- Use this to understand the project layout, find where to put new files, and check what already exists before creating anything.");
+    lines.push(`- Only list directories within \`${cwd}\`.`);
   }
 
   // ── http_request ──
