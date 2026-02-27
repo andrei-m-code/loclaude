@@ -4,7 +4,7 @@ export const DEFAULT_CONFIG: Config = {
   provider: {
     name: "ollama",
     baseUrl: "http://localhost:11434",
-    model: "llama3.1",
+    model: "qwen3-coder:30b",
     temperature: 0.1,
     maxTokens: 4096,
     contextWindow: 8192,
