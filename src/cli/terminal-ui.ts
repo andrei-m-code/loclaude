@@ -62,12 +62,11 @@ export class TerminalUI {
     this.raw(`${ESC}[2J`);
     // Set scroll region
     this.applyScrollRegion();
-    // Move cursor to top-left of scroll region
-    this.raw(`${ESC}[1;1H`);
     // Draw the fixed bottom bar
     this.drawBottomBar();
-    // Cursor back into scroll region
-    this.raw(`${ESC}[1;1H`);
+    // Position cursor at bottom of scroll region so content appears
+    // right above the input box (chat-style, growing upward)
+    this.moveCursorToScrollBottom();
 
     // Raw mode for keystroke handling
     if (process.stdin.isTTY) {
@@ -222,6 +221,13 @@ export class TerminalUI {
     this.raw(`${ESC}[1;${scrollEnd}r`);
   }
 
+  /** Move cursor to the last row of the scroll region, column 1.
+   *  This makes new output appear right above the input box. */
+  private moveCursorToScrollBottom(): void {
+    const scrollEnd = Math.max(1, this.rows - TerminalUI.BOTTOM_HEIGHT);
+    this.raw(`${ESC}[${scrollEnd};1H`);
+  }
+
   private drawBottomBar(): void {
     this.raw(`${ESC}7`);
     this.drawStatusLine_raw();
@@ -318,9 +324,8 @@ export class TerminalUI {
         this.cols = Math.max(TerminalUI.MIN_COLS, process.stdout.columns ?? 80);
         this.raw(`${ESC}[2J`);
         this.applyScrollRegion();
-        this.raw(`${ESC}[1;1H`);
         this.drawBottomBar();
-        this.raw(`${ESC}[1;1H`);
+        this.moveCursorToScrollBottom();
       } else if (code >= 32) {
         if (!this.running) {
           this.inputBuffer += ch;
@@ -345,9 +350,8 @@ export class TerminalUI {
     // Full redraw: clear screen, reapply layout, redraw fixed areas
     this.raw(`${ESC}[2J`);          // clear entire alternate screen
     this.applyScrollRegion();
-    this.raw(`${ESC}[1;1H`);        // cursor to top-left of scroll region
     this.drawBottomBar();
-    this.raw(`${ESC}[1;1H`);        // cursor back into scroll region
+    this.moveCursorToScrollBottom();
 
     // Resume inline spinner if it was active
     if (hadInlineSpinner) {
