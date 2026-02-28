@@ -138,6 +138,11 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             break;
 
           case "loop_complete":
+            // Restart spinner — more phases may follow (e.g. verify after execute).
+            // The post-loop cleanup below will stop it for good when the agent finishes.
+            ui.startSpinner("Thinking...");
+            firstTextChunk = true;
+            ui.startInlineSpinner(requestStart);
             break;
 
           case "plan_ready":
@@ -145,6 +150,8 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             break;
 
           case "step_start":
+            ui.stopInlineSpinner();
+            if (!firstTextChunk) ui.writeLine("");
             renderer.renderStepStart(event.stepNumber, event.totalSteps, event.description);
             ui.startSpinner(`Step ${event.stepNumber}/${event.totalSteps}...`);
             firstTextChunk = true;
@@ -156,7 +163,10 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             ui.stopSpinner();
             if (!firstTextChunk) ui.writeLine("");
             renderer.renderStepEnd(event.stepNumber, event.success);
+            // Restart spinner — next step or verify phase may follow
+            ui.startSpinner("Thinking...");
             firstTextChunk = true;
+            ui.startInlineSpinner(requestStart);
             break;
 
           case "error":
