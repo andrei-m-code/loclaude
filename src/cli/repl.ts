@@ -4,13 +4,20 @@ import type { Agent, AgentEvent } from "../agent/agent.js";
 import { TerminalUI, formatElapsed } from "./terminal-ui.js";
 import { Renderer } from "./renderer.js";
 import { detectToolCallMode, ToolCallMode } from "../providers/tool-capability.js";
+import { createProvider } from "../providers/factory.js";
+import { saveSession, type SessionConfig } from "../config/session.js";
 import type { SelectorItem } from "./selector.js";
+
+const SUPPORTED_PROVIDERS = ["ollama", "openai"];
 
 interface ReplOptions {
   agent: Agent;
   providerName: string;
   modelName: string;
   workingDirectory: string;
+  cwd: string;
+  session: SessionConfig;
+  needsOnboarding: boolean;
 }
 
 function formatTokens(n: number): string {
@@ -20,8 +27,12 @@ function formatTokens(n: number): string {
 }
 
 export async function startRepl(options: ReplOptions): Promise<never> {
-  const { agent, providerName } = options;
+  const { agent } = options;
   const folderName = path.basename(options.workingDirectory);
+
+  // Mutable session state — saved to LOCLAUDE.md on changes
+  let session: SessionConfig = { ...options.session };
+  const cwd = options.cwd;
 
   let running = false;
   let totalIn = 0;
@@ -31,7 +42,12 @@ export async function startRepl(options: ReplOptions): Promise<never> {
     const currentDir = agent.getCurrentDir();
     const relative = path.relative(options.workingDirectory, currentDir);
     const displayDir = relative ? `${folderName}/${relative}` : folderName;
-    return `${agent.getModel()} | ${displayDir} | in:${formatTokens(totalIn)} out:${formatTokens(totalOut)}`;
+    const providerLabel = session.provider ?? "ollama";
+    return `${providerLabel}/${agent.getModel()} | ${displayDir} | in:${formatTokens(totalIn)} out:${formatTokens(totalOut)}`;
+  }
+
+  function persistSession(): void {
+    saveSession(cwd, session);
   }
 
   const ui = new TerminalUI({
@@ -61,8 +77,14 @@ export async function startRepl(options: ReplOptions): Promise<never> {
   const renderer = new Renderer(ui);
 
   ui.start();
-  ui.setCompletions(["/help", "/model", "/clear", "/tools", "/exit", "/quit"]);
+  ui.setCompletions(["/help", "/model", "/provider", "/clear", "/tools", "/exit", "/quit"]);
   ui.setStatus(buildStatusText());
+
+  // -- Onboarding flow --
+  if (options.needsOnboarding) {
+    await runOnboarding(agent, ui, session, cwd, persistSession);
+    ui.setStatus(buildStatusText());
+  }
 
   async function handleSubmit(text: string): Promise<void> {
     if (running) return;
@@ -72,7 +94,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
 
     // Slash commands
     if (text.startsWith("/")) {
-      await handleSlashCommand(text, agent, ui, renderer);
+      await handleSlashCommand(text, agent, ui, renderer, session, cwd, persistSession);
       ui.setStatus(buildStatusText());
       return;
     }
@@ -215,11 +237,105 @@ export async function startRepl(options: ReplOptions): Promise<never> {
   return new Promise<never>(() => {});
 }
 
+// -- Onboarding --
+
+async function runOnboarding(
+  agent: Agent,
+  ui: TerminalUI,
+  session: SessionConfig,
+  cwd: string,
+  persistSession: () => void,
+): Promise<void> {
+  ui.writeLine(chalk.bold("\nWelcome to ollama-claude!\n"));
+  ui.writeLine(chalk.dim("Let's set up your provider and model.\n"));
+
+  // 1. Pick provider
+  const providerItems: SelectorItem[] = SUPPORTED_PROVIDERS.map((p) => ({
+    id: p,
+    label: p,
+    detail: p === "ollama" ? "Local models" : "OpenAI API",
+    isActive: p === (session.provider ?? "ollama"),
+  }));
+
+  const selectedProvider = await ui.openSelector(providerItems, { title: "Select a provider" });
+  const providerName = selectedProvider ?? "ollama";
+  session.provider = providerName;
+
+  // 2. Provider-specific setup
+  let baseUrl: string | undefined;
+  let apiKey: string | undefined;
+
+  if (providerName === "ollama") {
+    const defaultUrl = "http://localhost:11434";
+    const enteredUrl = await ui.prompt("Enter Ollama URL:", { defaultValue: defaultUrl });
+    baseUrl = enteredUrl || defaultUrl;
+
+    // Health check the chosen URL
+    let provider = createProvider({ provider: "ollama", baseUrl });
+    let health = await provider.healthCheck();
+
+    if (!health.ok) {
+      ui.writeLine(chalk.yellow(`Cannot reach Ollama at ${baseUrl}.`));
+      const retryUrl = await ui.prompt("Enter a different URL (or press Enter to continue):", { defaultValue: baseUrl });
+      if (retryUrl && retryUrl !== baseUrl) {
+        baseUrl = retryUrl;
+        provider = createProvider({ provider: "ollama", baseUrl });
+        health = await provider.healthCheck();
+        if (!health.ok) {
+          ui.writeLine(chalk.red(`Still cannot reach Ollama at ${baseUrl}. Continuing anyway.`));
+        }
+      }
+    }
+
+    session.baseUrl = baseUrl;
+
+    // Pick model
+    const modelName = await pickModel(provider, agent.getModel(), ui);
+    if (modelName) {
+      session.model = modelName;
+      agent.setModel(modelName);
+      agent.setProvider(provider, baseUrl);
+    }
+  } else if (providerName === "openai") {
+    apiKey = session.apiKeys?.openai;
+    if (!apiKey) {
+      apiKey = await ui.prompt("Enter OpenAI API key:", { secret: true });
+    }
+    if (!apiKey) {
+      ui.writeLine(chalk.yellow("No API key provided. You can set it later with /provider openai."));
+      return;
+    }
+
+    session.apiKeys = { ...session.apiKeys, openai: apiKey };
+    baseUrl = "https://api.openai.com";
+    session.baseUrl = baseUrl;
+
+    const provider = createProvider({ provider: "openai", apiKey, baseUrl, maxRetries: session.maxRetries });
+    agent.setProvider(provider, baseUrl);
+
+    // Pick model
+    const modelName = await pickModel(provider, "gpt-4o-mini", ui);
+    if (modelName) {
+      session.model = modelName;
+      agent.setModel(modelName);
+    }
+  }
+
+  // Save session
+  persistSession();
+  ui.writeLine(chalk.green("\nSetup complete! Session saved to LOCLAUDE.md.\n"));
+}
+
+// -- Slash commands --
+
 async function handleSlashCommand(
   input: string,
   agent: Agent,
   ui: TerminalUI,
   renderer: Renderer,
+  session: SessionConfig,
+  cwd: string,
+  persistSession: () => void,
 ): Promise<void> {
   const parts = input.split(/\s+/);
   const cmd = parts[0];
@@ -228,18 +344,24 @@ async function handleSlashCommand(
   switch (cmd) {
     case "/help":
       ui.writeLine(chalk.bold("\nAvailable commands:\n"));
-      ui.writeLine("  /help           — Show this help message");
-      ui.writeLine("  /model          — List available models");
-      ui.writeLine("  /model <name>   — Switch to a different model");
-      ui.writeLine("  /clear          — Clear conversation history");
-      ui.writeLine("  /tools          — List available tools");
-      ui.writeLine("  /exit           — Exit the REPL");
-      ui.writeLine("  /quit           — Exit the REPL");
+      ui.writeLine("  /help             — Show this help message");
+      ui.writeLine("  /model            — List available models");
+      ui.writeLine("  /model <name>     — Switch to a different model");
+      ui.writeLine("  /provider         — Switch provider (ollama, openai)");
+      ui.writeLine("  /provider <name>  — Switch to a specific provider");
+      ui.writeLine("  /clear            — Clear conversation history");
+      ui.writeLine("  /tools            — List available tools");
+      ui.writeLine("  /exit             — Exit the REPL");
+      ui.writeLine("  /quit             — Exit the REPL");
       ui.writeLine("");
       break;
 
     case "/model":
-      await handleModelCommand(arg, agent, ui);
+      await handleModelCommand(arg, agent, ui, session, persistSession);
+      break;
+
+    case "/provider":
+      await handleProviderCommand(arg, agent, ui, session, cwd, persistSession);
       break;
 
     case "/clear":
@@ -263,42 +385,131 @@ async function handleSlashCommand(
   }
 }
 
-async function handleModelCommand(arg: string, agent: Agent, ui: TerminalUI): Promise<void> {
+// -- /provider command --
+
+async function handleProviderCommand(
+  arg: string,
+  agent: Agent,
+  ui: TerminalUI,
+  session: SessionConfig,
+  cwd: string,
+  persistSession: () => void,
+): Promise<void> {
+  if (!arg) {
+    // Interactive selector
+    const items: SelectorItem[] = SUPPORTED_PROVIDERS.map((p) => ({
+      id: p,
+      label: p,
+      detail: p === "ollama" ? "Local models" : "OpenAI API",
+      isActive: p === (session.provider ?? "ollama"),
+    }));
+
+    const selected = await ui.openSelector(items, { title: "Select a provider" });
+    if (selected && selected !== session.provider) {
+      await switchProvider(selected, agent, ui, session, cwd, persistSession);
+    }
+    return;
+  }
+
+  // Direct switch
+  if (!SUPPORTED_PROVIDERS.includes(arg)) {
+    ui.writeLine(chalk.yellow(`Unknown provider: ${arg}. Supported: ${SUPPORTED_PROVIDERS.join(", ")}`));
+    return;
+  }
+
+  if (arg === session.provider) {
+    ui.writeLine(chalk.dim(`Already using ${arg}.`));
+    return;
+  }
+
+  await switchProvider(arg, agent, ui, session, cwd, persistSession);
+}
+
+async function switchProvider(
+  providerName: string,
+  agent: Agent,
+  ui: TerminalUI,
+  session: SessionConfig,
+  _cwd: string,
+  persistSession: () => void,
+): Promise<void> {
+  let apiKey: string | undefined;
+  let baseUrl: string;
+
+  if (providerName === "openai") {
+    apiKey = session.apiKeys?.openai;
+    if (!apiKey) {
+      apiKey = await ui.prompt("Enter OpenAI API key:", { secret: true });
+      if (!apiKey) {
+        ui.writeLine(chalk.yellow("No API key provided. Provider not switched."));
+        return;
+      }
+      session.apiKeys = { ...session.apiKeys, openai: apiKey };
+    }
+    baseUrl = "https://api.openai.com";
+  } else {
+    baseUrl = session.baseUrl ?? "http://localhost:11434";
+  }
+
+  try {
+    const provider = createProvider({
+      provider: providerName,
+      apiKey,
+      baseUrl,
+      maxRetries: session.maxRetries,
+    });
+
+    agent.setProvider(provider, baseUrl);
+    session.provider = providerName;
+    session.baseUrl = baseUrl;
+
+    // Pick model from new provider
+    const modelName = await pickModel(provider, agent.getModel(), ui);
+    if (modelName) {
+      agent.setModel(modelName);
+      agent.reset();
+      session.model = modelName;
+
+      const mode = await detectToolCallMode(modelName, baseUrl);
+      const modeLabel =
+        mode === ToolCallMode.NATIVE
+          ? chalk.green("native tools")
+          : chalk.yellow("prompt-based fallback");
+
+      ui.writeLine(
+        chalk.green(`Switched to ${providerName}/${modelName}`) +
+          chalk.dim(` | Tool mode: `) +
+          modeLabel +
+          chalk.dim(" (conversation cleared)"),
+      );
+    } else {
+      ui.writeLine(chalk.green(`Switched to ${providerName}`));
+    }
+
+    persistSession();
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ui.writeLine(chalk.red(`Failed to switch provider: ${msg}`));
+  }
+}
+
+// -- /model command --
+
+async function handleModelCommand(
+  arg: string,
+  agent: Agent,
+  ui: TerminalUI,
+  session: SessionConfig,
+  persistSession: () => void,
+): Promise<void> {
   const provider = agent.getProvider();
 
   if (!arg) {
     // Interactive selector mode
-    try {
-      const models = await provider.listModels();
-
-      if (models.length === 0) {
-        ui.writeLine(chalk.yellow("No models found. Run `ollama pull <model>` to download one."));
-        return;
-      }
-
-      const current = agent.getModel();
-      const items: SelectorItem[] = models.map((model) => {
-        const isCurrent = model.name === current || model.id === current;
-        const parts: string[] = [];
-        if (model.size) parts.push(formatSize(model.size));
-        if (model.quantization) parts.push(`[${model.quantization}]`);
-        return {
-          id: model.name,
-          label: model.name,
-          detail: parts.join(" "),
-          isActive: isCurrent,
-        };
-      });
-
-      const selected = await ui.openSelector(items, { title: "Select a model" });
-      if (selected) {
-        await switchModel(selected, agent, ui);
-      }
-    } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      ui.writeLine(chalk.red(`Failed to list models: ${msg}`));
+    const modelName = await pickModel(provider, agent.getModel(), ui);
+    if (modelName) {
+      await switchModel(modelName, agent, ui, session, persistSession);
     }
-
     return;
   }
 
@@ -311,23 +522,30 @@ async function handleModelCommand(arg: string, agent: Agent, ui: TerminalUI): Pr
 
     if (!match) {
       ui.writeLine(
-        chalk.yellow(`Model '${arg}' not found locally.`) +
-          chalk.dim(` Run \`ollama pull ${arg}\` to download it.`),
+        chalk.yellow(`Model '${arg}' not found.`) +
+          chalk.dim(` Use /model to see available models.`),
       );
-      ui.writeLine(chalk.dim("Use /model to see available models."));
       return;
     }
 
-    await switchModel(match.name, agent, ui);
+    await switchModel(match.name, agent, ui, session, persistSession);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     ui.writeLine(chalk.red(`Failed to switch model: ${msg}`));
   }
 }
 
-async function switchModel(modelName: string, agent: Agent, ui: TerminalUI): Promise<void> {
+async function switchModel(
+  modelName: string,
+  agent: Agent,
+  ui: TerminalUI,
+  session: SessionConfig,
+  persistSession: () => void,
+): Promise<void> {
   agent.setModel(modelName);
   agent.reset();
+  session.model = modelName;
+  persistSession();
 
   const mode = await detectToolCallMode(modelName, agent.getBaseUrl());
   const modeLabel =
@@ -341,6 +559,42 @@ async function switchModel(modelName: string, agent: Agent, ui: TerminalUI): Pro
       modeLabel +
       chalk.dim(" (conversation cleared)"),
   );
+}
+
+// -- Shared helpers --
+
+async function pickModel(
+  provider: { listModels(): Promise<{ id: string; name: string; size?: number; quantization?: string }[]> },
+  currentModel: string,
+  ui: TerminalUI,
+): Promise<string | null> {
+  try {
+    const models = await provider.listModels();
+
+    if (models.length === 0) {
+      ui.writeLine(chalk.yellow("No models found."));
+      return null;
+    }
+
+    const items: SelectorItem[] = models.map((model) => {
+      const isCurrent = model.name === currentModel || model.id === currentModel;
+      const parts: string[] = [];
+      if (model.size) parts.push(formatSize(model.size));
+      if (model.quantization) parts.push(`[${model.quantization}]`);
+      return {
+        id: model.name,
+        label: model.name,
+        detail: parts.join(" "),
+        isActive: isCurrent,
+      };
+    });
+
+    return ui.openSelector(items, { title: "Select a model" });
+  } catch (err) {
+    const msg = err instanceof Error ? err.message : String(err);
+    ui.writeLine(chalk.red(`Failed to list models: ${msg}`));
+    return null;
+  }
 }
 
 function formatSize(bytes: number): string {

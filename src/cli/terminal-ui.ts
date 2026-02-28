@@ -31,6 +31,7 @@ const BOX = {
 enum InputMode {
   NORMAL,
   SELECTOR,
+  PROMPT,
 }
 
 /**
@@ -58,6 +59,7 @@ export class TerminalUI {
   private rows = 0;
   private cols = 0;
   private inputBuffer = "";
+  private inputCursor = 0; // cursor position within inputBuffer
   private statusText = "";
   private running = false;
 
@@ -67,6 +69,13 @@ export class TerminalUI {
   // Selector overlay
   private selector: Selector | null = null;
   private selectorResolve: ((id: string | null) => void) | null = null;
+
+  // Prompt overlay
+  private promptLabel = "";
+  private promptSecret = false;
+  private promptBuffer = "";
+  private promptCursor = 0;
+  private promptResolve: ((value: string) => void) | null = null;
 
   // Ghost text autocomplete
   private ghostText = "";
@@ -218,6 +227,23 @@ export class TerminalUI {
     });
   }
 
+  /**
+   * Prompt the user for text input. Shows a label above the input area.
+   * If secret is true, input characters render as '*'.
+   * Returns the entered text, or "" if cancelled (Escape).
+   */
+  prompt(label: string, options?: { secret?: boolean; defaultValue?: string }): Promise<string> {
+    return new Promise((resolve) => {
+      this.promptLabel = label;
+      this.promptSecret = options?.secret ?? false;
+      this.promptBuffer = options?.defaultValue ?? "";
+      this.promptCursor = this.promptBuffer.length;
+      this.promptResolve = resolve;
+      this.inputMode = InputMode.PROMPT;
+      this.drawInputBox();
+    });
+  }
+
   /** Start an inline spinner at the current cursor position in the scroll region.
    *  If startTime is provided, the elapsed timer continues from that point instead of resetting. */
   startInlineSpinner(startTime?: number): void {
@@ -329,20 +355,84 @@ export class TerminalUI {
     // Top rule — row H-3
     const topRow = this.rows - 3;
     this.raw(`${ESC}[${topRow};1H${ESC}[2K`);
-    this.raw(chalk.dim(BOX.horizontal.repeat(Math.min(w, this.cols))));
+
+    if (this.inputMode === InputMode.PROMPT) {
+      // Show prompt label on the top rule line
+      const label = ` ${this.promptLabel} `;
+      const ruleLen = Math.max(0, w - label.length);
+      const leftRule = BOX.horizontal.repeat(Math.min(2, ruleLen));
+      const rightRule = BOX.horizontal.repeat(Math.max(0, ruleLen - 2));
+      this.raw(chalk.dim(leftRule) + chalk.cyan(label) + chalk.dim(rightRule));
+    } else {
+      this.raw(chalk.dim(BOX.horizontal.repeat(Math.min(w, this.cols))));
+    }
 
     // Input content — row H-2
     const midRow = this.rows - 2;
     this.raw(`${ESC}[${midRow};1H${ESC}[2K`);
-    const promptPrefix = "> ";
-    const cursor = this.running ? " " : "█";
-    const ghost = !this.running && this.ghostText ? chalk.dim.gray(this.ghostText) : "";
-    const content = this.inputBuffer + cursor + ghost;
-    const maxContent = Math.max(0, w - promptPrefix.length);
-    const visible = content.length > maxContent
-      ? content.slice(content.length - maxContent)
-      : content;
-    this.raw(chalk.bold.green(promptPrefix) + visible);
+
+    if (this.inputMode === InputMode.PROMPT) {
+      const promptPrefix = "> ";
+      const buf = this.promptBuffer;
+      const cur = this.promptCursor;
+      const displayBuf = this.promptSecret ? "*".repeat(buf.length) : buf;
+      // Insert block cursor at position
+      const before = displayBuf.slice(0, cur);
+      const cursorChar = cur < displayBuf.length ? displayBuf[cur] : " ";
+      const after = cur < displayBuf.length ? displayBuf.slice(cur + 1) : "";
+      const content = before + chalk.inverse(cursorChar) + after;
+      const maxContent = Math.max(0, w - promptPrefix.length);
+      // Simple truncation: keep cursor visible by scrolling window
+      const rawLen = buf.length + 1; // +1 for cursor block
+      if (rawLen <= maxContent) {
+        this.raw(chalk.bold.cyan(promptPrefix) + content);
+      } else {
+        // Scroll so cursor stays visible
+        const scrollOffset = Math.max(0, cur - maxContent + 2);
+        const slicedBuf = displayBuf.slice(scrollOffset, scrollOffset + maxContent);
+        const adjCur = cur - scrollOffset;
+        const sb = slicedBuf.slice(0, adjCur);
+        const sc = adjCur < slicedBuf.length ? slicedBuf[adjCur] : " ";
+        const sa = adjCur < slicedBuf.length ? slicedBuf.slice(adjCur + 1) : "";
+        this.raw(chalk.bold.cyan(promptPrefix) + sb + chalk.inverse(sc) + sa);
+      }
+    } else {
+      const promptPrefix = "> ";
+      const buf = this.inputBuffer;
+      const cur = this.inputCursor;
+      const ghost = !this.running && this.ghostText ? chalk.dim.gray(this.ghostText) : "";
+
+      if (this.running) {
+        // No cursor while running
+        const content = buf + ghost;
+        const maxContent = Math.max(0, w - promptPrefix.length);
+        const visible = content.length > maxContent
+          ? content.slice(content.length - maxContent)
+          : content;
+        this.raw(chalk.bold.green(promptPrefix) + visible);
+      } else {
+        // Insert block cursor at position
+        const before = buf.slice(0, cur);
+        const cursorChar = cur < buf.length ? buf[cur] : " ";
+        const after = cur < buf.length ? buf.slice(cur + 1) : "";
+        // Ghost text only shows when cursor is at end
+        const tail = cur >= buf.length ? ghost : after;
+        const content = before + chalk.inverse(cursorChar) + tail;
+        const maxContent = Math.max(0, w - promptPrefix.length);
+        const rawLen = buf.length + 1;
+        if (rawLen <= maxContent) {
+          this.raw(chalk.bold.green(promptPrefix) + content);
+        } else {
+          const scrollOffset = Math.max(0, cur - maxContent + 2);
+          const slicedBuf = buf.slice(scrollOffset, scrollOffset + maxContent);
+          const adjCur = cur - scrollOffset;
+          const sb = slicedBuf.slice(0, adjCur);
+          const sc = adjCur < slicedBuf.length ? slicedBuf[adjCur] : " ";
+          const sa = adjCur < slicedBuf.length ? slicedBuf.slice(adjCur + 1) : "";
+          this.raw(chalk.bold.green(promptPrefix) + sb + chalk.inverse(sc) + sa);
+        }
+      }
+    }
 
     // Bottom rule — row H-1
     const botRow = this.rows - 1;
@@ -367,11 +457,34 @@ export class TerminalUI {
   private onKeypress = (data: string): void => {
     // Parse escape sequences into named keys
     if (data.length > 1 && data.charCodeAt(0) === 27) {
-      // ESC [ <letter> — standard arrow keys and common sequences
+      // Plain arrow keys: ESC [ A/B/C/D
       if (data === `${ESC}[A`) { this.handleParsedKey("up"); return; }
       if (data === `${ESC}[B`) { this.handleParsedKey("down"); return; }
       if (data === `${ESC}[C`) { this.handleParsedKey("right"); return; }
       if (data === `${ESC}[D`) { this.handleParsedKey("left"); return; }
+
+      // Option+Arrow (word jump): ESC [1;3C / ESC [1;3D  or  ESC f / ESC b
+      if (data === `${ESC}[1;3C` || data === `${ESC}f`) { this.handleParsedKey("word-right"); return; }
+      if (data === `${ESC}[1;3D` || data === `${ESC}b`) { this.handleParsedKey("word-left"); return; }
+
+      // Cmd+Arrow (line jump) on macOS: ESC [1;9C / ESC [1;9D  or  ESC [H / ESC [F
+      if (data === `${ESC}[1;9C` || data === `${ESC}[F`) { this.handleParsedKey("end"); return; }
+      if (data === `${ESC}[1;9D` || data === `${ESC}[H`) { this.handleParsedKey("home"); return; }
+
+      // Ctrl+Arrow (word jump): ESC [1;5C / ESC [1;5D
+      if (data === `${ESC}[1;5C`) { this.handleParsedKey("word-right"); return; }
+      if (data === `${ESC}[1;5D`) { this.handleParsedKey("word-left"); return; }
+
+      // Option+Backspace (delete word): ESC + DEL (0x7f)
+      if (data === `${ESC}\x7f`) { this.handleParsedKey("delete-word"); return; }
+
+      // Delete key: ESC [3~
+      if (data === `${ESC}[3~`) { this.handleParsedKey("delete"); return; }
+
+      // Home / End: ESC [1~ / ESC [4~  or  ESC OH / ESC OF
+      if (data === `${ESC}[1~` || data === `${ESC}OH`) { this.handleParsedKey("home"); return; }
+      if (data === `${ESC}[4~` || data === `${ESC}OF`) { this.handleParsedKey("end"); return; }
+
       // Unknown escape sequence — ignore
       return;
     }
@@ -391,6 +504,21 @@ export class TerminalUI {
         this.handleParsedKey("enter");
       } else if (code === 127 || code === 8) {
         this.handleParsedKey("backspace");
+      } else if (code === 1) {
+        // Ctrl+A — home
+        this.handleParsedKey("home");
+      } else if (code === 5) {
+        // Ctrl+E — end
+        this.handleParsedKey("end");
+      } else if (code === 23) {
+        // Ctrl+W — delete word backward
+        this.handleParsedKey("delete-word");
+      } else if (code === 11) {
+        // Ctrl+K — kill to end of line
+        this.handleParsedKey("kill-line");
+      } else if (code === 21) {
+        // Ctrl+U — kill to start of line
+        this.handleParsedKey("kill-line-back");
       } else if (code === 3) {
         // Ctrl+C — always handle directly
         this.onInterrupt();
@@ -419,16 +547,23 @@ export class TerminalUI {
   private handleParsedKey(key: string): void {
     if (this.inputMode === InputMode.SELECTOR) {
       this.handleSelectorKey(key);
+    } else if (this.inputMode === InputMode.PROMPT) {
+      this.handlePromptKey(key);
     } else {
       this.handleNormalKey(key);
     }
   }
 
   private handleNormalKey(key: string): void {
+    if (this.running && key !== "escape") return;
+    const buf = this.inputBuffer;
+    const cur = this.inputCursor;
+
     switch (key) {
       case "enter": {
-        const text = this.inputBuffer;
+        const text = buf;
         this.inputBuffer = "";
+        this.inputCursor = 0;
         this.ghostText = "";
         this.drawInputBox();
         if (text.trim()) {
@@ -437,15 +572,85 @@ export class TerminalUI {
         break;
       }
       case "backspace":
-        if (this.inputBuffer.length > 0) {
-          this.inputBuffer = this.inputBuffer.slice(0, -1);
+        if (cur > 0) {
+          this.inputBuffer = buf.slice(0, cur - 1) + buf.slice(cur);
+          this.inputCursor = cur - 1;
           this.updateGhostText();
+          this.drawInputBox();
+        }
+        break;
+      case "delete":
+        if (cur < buf.length) {
+          this.inputBuffer = buf.slice(0, cur) + buf.slice(cur + 1);
+          this.updateGhostText();
+          this.drawInputBox();
+        }
+        break;
+      case "delete-word": {
+        if (cur > 0) {
+          const pos = wordBoundaryLeft(buf, cur);
+          this.inputBuffer = buf.slice(0, pos) + buf.slice(cur);
+          this.inputCursor = pos;
+          this.updateGhostText();
+          this.drawInputBox();
+        }
+        break;
+      }
+      case "kill-line":
+        this.inputBuffer = buf.slice(0, cur);
+        this.updateGhostText();
+        this.drawInputBox();
+        break;
+      case "kill-line-back":
+        this.inputBuffer = buf.slice(cur);
+        this.inputCursor = 0;
+        this.updateGhostText();
+        this.drawInputBox();
+        break;
+      case "left":
+        if (cur > 0) {
+          this.inputCursor = cur - 1;
+          this.drawInputBox();
+        }
+        break;
+      case "right":
+        if (cur < buf.length) {
+          this.inputCursor = cur + 1;
+          this.drawInputBox();
+        } else if (this.ghostText) {
+          // Right at end with ghost text = accept ghost
+          this.inputBuffer += this.ghostText;
+          this.inputCursor = this.inputBuffer.length;
+          this.ghostText = "";
+          this.drawInputBox();
+        }
+        break;
+      case "word-left": {
+        this.inputCursor = wordBoundaryLeft(buf, cur);
+        this.drawInputBox();
+        break;
+      }
+      case "word-right": {
+        this.inputCursor = wordBoundaryRight(buf, cur);
+        this.drawInputBox();
+        break;
+      }
+      case "home":
+        if (cur > 0) {
+          this.inputCursor = 0;
+          this.drawInputBox();
+        }
+        break;
+      case "end":
+        if (cur < buf.length) {
+          this.inputCursor = buf.length;
           this.drawInputBox();
         }
         break;
       case "tab":
         if (this.ghostText) {
           this.inputBuffer += this.ghostText;
+          this.inputCursor = this.inputBuffer.length;
           this.ghostText = "";
           this.drawInputBox();
         }
@@ -458,14 +663,12 @@ export class TerminalUI {
         break;
       case "up":
       case "down":
-      case "left":
-      case "right":
-        // Arrow keys in normal mode — ignore for now
         break;
       default:
-        // Printable character
-        if (!this.running && key.length === 1) {
-          this.inputBuffer += key;
+        // Printable character — insert at cursor
+        if (key.length === 1) {
+          this.inputBuffer = buf.slice(0, cur) + key + buf.slice(cur);
+          this.inputCursor = cur + 1;
           this.updateGhostText();
           this.drawInputBox();
         }
@@ -488,6 +691,109 @@ export class TerminalUI {
       // Key consumed — re-render selector
       this.renderSelector();
     }
+  }
+
+  private handlePromptKey(key: string): void {
+    const buf = this.promptBuffer;
+    const cur = this.promptCursor;
+
+    switch (key) {
+      case "enter": {
+        const value = buf;
+        this.dismissPrompt();
+        this.promptResolve?.(value);
+        this.promptResolve = null;
+        break;
+      }
+      case "escape":
+        this.dismissPrompt();
+        this.promptResolve?.("");
+        this.promptResolve = null;
+        break;
+      case "backspace":
+        if (cur > 0) {
+          this.promptBuffer = buf.slice(0, cur - 1) + buf.slice(cur);
+          this.promptCursor = cur - 1;
+          this.drawInputBox();
+        }
+        break;
+      case "delete":
+        if (cur < buf.length) {
+          this.promptBuffer = buf.slice(0, cur) + buf.slice(cur + 1);
+          this.drawInputBox();
+        }
+        break;
+      case "delete-word": {
+        if (cur > 0) {
+          const pos = wordBoundaryLeft(buf, cur);
+          this.promptBuffer = buf.slice(0, pos) + buf.slice(cur);
+          this.promptCursor = pos;
+          this.drawInputBox();
+        }
+        break;
+      }
+      case "kill-line":
+        this.promptBuffer = buf.slice(0, cur);
+        this.drawInputBox();
+        break;
+      case "kill-line-back":
+        this.promptBuffer = buf.slice(cur);
+        this.promptCursor = 0;
+        this.drawInputBox();
+        break;
+      case "left":
+        if (cur > 0) {
+          this.promptCursor = cur - 1;
+          this.drawInputBox();
+        }
+        break;
+      case "right":
+        if (cur < buf.length) {
+          this.promptCursor = cur + 1;
+          this.drawInputBox();
+        }
+        break;
+      case "word-left":
+        this.promptCursor = wordBoundaryLeft(buf, cur);
+        this.drawInputBox();
+        break;
+      case "word-right":
+        this.promptCursor = wordBoundaryRight(buf, cur);
+        this.drawInputBox();
+        break;
+      case "home":
+        if (cur > 0) {
+          this.promptCursor = 0;
+          this.drawInputBox();
+        }
+        break;
+      case "end":
+        if (cur < buf.length) {
+          this.promptCursor = buf.length;
+          this.drawInputBox();
+        }
+        break;
+      case "up":
+      case "down":
+      case "tab":
+        break;
+      default:
+        if (key.length === 1) {
+          this.promptBuffer = buf.slice(0, cur) + key + buf.slice(cur);
+          this.promptCursor = cur + 1;
+          this.drawInputBox();
+        }
+        break;
+    }
+  }
+
+  private dismissPrompt(): void {
+    this.inputMode = InputMode.NORMAL;
+    this.promptLabel = "";
+    this.promptBuffer = "";
+    this.promptCursor = 0;
+    this.promptSecret = false;
+    this.drawInputBox();
   }
 
   // ── Ghost text ──────────────────────────────────────────
@@ -578,4 +884,31 @@ export class TerminalUI {
   private raw(text: string): void {
     process.stdout.write(text);
   }
+}
+
+// ── Word boundary helpers ──────────────────────────────────
+
+function isWordChar(ch: string): boolean {
+  return /\w/.test(ch);
+}
+
+/** Find the position of the previous word boundary (Option+Left / Ctrl+Left). */
+function wordBoundaryLeft(text: string, cursor: number): number {
+  let pos = cursor;
+  // Skip whitespace/non-word chars
+  while (pos > 0 && !isWordChar(text[pos - 1])) pos--;
+  // Skip word chars
+  while (pos > 0 && isWordChar(text[pos - 1])) pos--;
+  return pos;
+}
+
+/** Find the position of the next word boundary (Option+Right / Ctrl+Right). */
+function wordBoundaryRight(text: string, cursor: number): number {
+  let pos = cursor;
+  const len = text.length;
+  // Skip word chars
+  while (pos < len && isWordChar(text[pos])) pos++;
+  // Skip whitespace/non-word chars
+  while (pos < len && !isWordChar(text[pos])) pos++;
+  return pos;
 }

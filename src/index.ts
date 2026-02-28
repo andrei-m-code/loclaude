@@ -1,6 +1,6 @@
 import * as path from "node:path";
 import * as fs from "node:fs";
-import { loadConfig } from "./config/index.js";
+import { loadConfig, loadSession, type SessionConfig } from "./config/index.js";
 import { createProvider } from "./providers/factory.js";
 import { getModelDefaults } from "./providers/model-defaults.js";
 import { ToolRegistry } from "./tools/registry.js";
@@ -60,18 +60,10 @@ async function main() {
     process.exit(0);
   }
 
-  // 1. Load config
+  // 1. Load config (env vars + defaults)
   const config = loadConfig();
 
-  // 2. Create provider
-  const provider = createProvider({
-    provider: config.provider.name,
-    baseUrl: config.provider.baseUrl,
-    defaultModel: config.provider.model,
-    apiKey: config.provider.apiKey,
-  });
-
-  // 3. Resolve working directory
+  // 2. Resolve working directory
   let cwd = process.cwd();
   if (args.cwd) {
     cwd = path.resolve(args.cwd);
@@ -82,7 +74,34 @@ async function main() {
     process.chdir(cwd);
   }
 
-  // 4. Create tool registry
+  // 3. Load session config (LOCLAUDE.md) — merge with env/defaults
+  const session = loadSession(cwd);
+  const needsOnboarding = session === null;
+
+  // Merge: env vars > session > defaults
+  const providerName = config.provider.name !== "ollama" ? config.provider.name
+    : session?.provider ?? config.provider.name;
+  const modelName = process.env.OLLAMA_CLAUDE_MODEL
+    ? config.provider.model
+    : session?.model ?? config.provider.model;
+  const apiKey = process.env.OLLAMA_CLAUDE_API_KEY
+    ? config.provider.apiKey
+    : session?.apiKeys?.[providerName] ?? config.provider.apiKey;
+  const baseUrl = process.env.OLLAMA_CLAUDE_BASE_URL
+    ? config.provider.baseUrl
+    : session?.baseUrl ?? config.provider.baseUrl;
+
+  // 4. Create provider
+  const maxRetries = session?.maxRetries;
+  const provider = createProvider({
+    provider: providerName,
+    baseUrl,
+    defaultModel: modelName,
+    apiKey,
+    maxRetries,
+  });
+
+  // 5. Create tool registry
   const toolRegistry = new ToolRegistry();
   toolRegistry.register(new FileReadTool(cwd));
   toolRegistry.register(new FileWriteTool(cwd));
@@ -95,26 +114,26 @@ async function main() {
   toolRegistry.register(bashTool);
   toolRegistry.register(new HttpRequestTool());
 
-  // 4. Scan workspace and build system prompt
+  // 6. Scan workspace and build system prompt
   const workspaceContext = await scanWorkspace(cwd);
   const systemPrompt = buildSystemPrompt({
     tools: toolRegistry.getToolDefinitions(),
     workingDirectory: cwd,
     providerName: provider.displayName,
-    modelName: config.provider.model,
+    modelName,
     workspaceContext,
   });
 
-  // 5. Create agent (model defaults as base, explicit config overrides)
-  const modelDefaults = getModelDefaults(config.provider.model);
+  // 7. Create agent (model defaults as base, explicit config overrides)
+  const modelDefaults = getModelDefaults(modelName);
 
   const agent = new Agent({
     provider,
     toolRegistry,
     config: {
-      model: config.provider.model,
+      model: modelName,
       systemPrompt,
-      baseUrl: config.provider.baseUrl,
+      baseUrl,
       workingDirectory: cwd,
       workspaceContext,
       temperature: config.provider.temperature ?? modelDefaults.temperature,
@@ -126,12 +145,24 @@ async function main() {
     },
   });
 
-  // 6. Start REPL
+  // 8. Build initial session state for REPL to track
+  const initialSession: SessionConfig = {
+    provider: providerName,
+    model: modelName,
+    apiKeys: apiKey ? { [providerName]: apiKey } : session?.apiKeys,
+    baseUrl: providerName !== "ollama" ? baseUrl : session?.baseUrl,
+    maxRetries: session?.maxRetries ?? 3,
+  };
+
+  // 9. Start REPL (with onboarding flag + session state)
   await startRepl({
     agent,
-    providerName: config.provider.name,
-    modelName: config.provider.model,
+    providerName,
+    modelName,
     workingDirectory: cwd,
+    cwd,
+    session: initialSession,
+    needsOnboarding,
   });
 }
 

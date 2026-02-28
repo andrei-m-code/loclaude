@@ -26,7 +26,7 @@ export function buildSystemPrompt(options: SystemPromptOptions): string {
 Your workspace is: ${cwd}
 ALL file and command operations MUST stay within this directory and its subdirectories. You have full access to create/edit/delete files in any subfolder. Never access paths outside it. Never use sudo.
 
-When tackling a task: first investigate (read files, list directories) before making changes. Explain your approach briefly, then execute. After changes, verify the result.`);
+When tackling a task: first investigate (read files, list directories) before making changes. Explain your approach briefly, then execute.`);
 
   // -- Rules --
   sections.push(`## Rules
@@ -137,6 +137,7 @@ Use bash ONLY for: builds, tests, git, package installs, running programs, and c
     lines.push(`
 ### Bash Usage
 - All commands run from \`${cwd}\` by default. Use \`working_directory\` parameter for subdirectories — do NOT use \`cd\`.
+- **NEVER run applications** to verify changes. Commands like \`dotnet run\`, \`node app.js\`, \`python main.py\`, \`./app\`, \`npm start\`, \`cargo run\` can block forever. Use build commands instead (\`dotnet build\`, \`npm run build\`, \`go build\`, etc.).
 - No sudo, no interactive commands (vi, nano, less), no global installs.
 - Common patterns:
   - Remove non-empty directory: \`rm -rf dirname/\` (NOT \`rmdir\` — that only works on empty dirs)
@@ -230,7 +231,6 @@ When the user asks you to modify code, fix bugs, or add features — you MUST se
 2. Search for login function/handler with grep: \`login\`, \`authenticate\` [grep]
 3. Read the relevant source files found above [file_read]
 4. Edit the login handler to fix the bug [file_edit]
-5. Run tests to verify the fix [bash]
 
 **Example — user asks "add a dark mode toggle":**
 1. Search for UI/theme files with glob: \`**/*theme*\`, \`**/*.css\`, \`src/components/**\` [glob]
@@ -238,14 +238,20 @@ When the user asks you to modify code, fix bugs, or add features — you MUST se
 3. Read the main layout and theme files [file_read]
 4. Edit theme configuration to add dark mode [file_edit]
 5. Edit the layout component to add the toggle [file_edit]
-6. Verify by building the project [bash]
+
+**Example — user asks "update the project to .NET 10":**
+1. Find project files with glob: \`**/*.csproj\` [glob]
+2. Read the project file [file_read]
+3. Edit the TargetFramework to net10.0 [file_edit]
+4. Build to check for errors: \`dotnet build\` [bash]
 
 ## Planning Guidelines
 - ALWAYS search first: use glob and grep to find the right files before editing
 - Use the project structure above to pick search patterns — reference actual directories you can see
 - One logical action per step — be specific with file paths and search patterns
 - Read files before editing — understand existing code, style, and structure
-- Do NOT add a verification/check step — verification is handled automatically after execution
+- Do NOT add a verification/run step at the end — verification is handled automatically
+- **NEVER run applications** (\`dotnet run\`, \`node app.js\`, \`python main.py\`, \`./app\`, etc.) to "test" or "verify" changes. Running an app can block forever waiting for input or start a server that never exits. Build commands (\`dotnet build\`, \`npm run build\`, \`go build\`, \`cargo build\`) are fine — they exit on their own.
 - Use the right tool: glob to find files, grep to search content, file_read to examine, file_edit for targeted changes, file_write to create new files, bash for commands
 - **NEVER use \`cd\` to switch directories.** All tools accept paths relative to workspace root (e.g., \`subdir/file.txt\`). For bash, use the \`working_directory\` parameter to run commands in subdirectories.`);
 

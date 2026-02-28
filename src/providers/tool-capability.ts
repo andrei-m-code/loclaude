@@ -30,6 +30,11 @@ const NATIVE_TOOL_SUPPORT: Record<string, boolean> = {
   "deepseek-r1": false,
   "starcoder": false,
   "stable-code": false,
+  // OpenAI models — all support native tool calling
+  "gpt-4": true,
+  "gpt-4o": true,
+  "gpt-3.5": true,
+  "chatgpt": true,
 };
 
 export enum ToolCallMode {

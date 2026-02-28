@@ -216,6 +216,12 @@ export class Agent {
     yield { type: "loop_complete", totalTurns: steps.length + 2 };
   }
 
+  setProvider(provider: LLMProvider, baseUrl: string): void {
+    this.provider = provider;
+    this.config = { ...this.config, baseUrl };
+    this.toolCallMode = null; // Re-detect on next run
+  }
+
   setModel(model: string): void {
     this.config = { ...this.config, model };
     this.toolCallMode = null; // Re-detect on next run

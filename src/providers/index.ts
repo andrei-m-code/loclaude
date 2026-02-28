@@ -14,6 +14,7 @@ export type {
   HealthCheckResult,
 } from "./types.js";
 export { OllamaProvider, type OllamaProviderConfig } from "./ollama.js";
+export { OpenAIProvider, type OpenAIProviderConfig } from "./openai.js";
 export { createProvider, type ProviderConfig } from "./factory.js";
 export { ToolCallMode, detectToolCallMode } from "./tool-capability.js";
 export {
