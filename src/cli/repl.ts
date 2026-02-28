@@ -4,6 +4,7 @@ import type { Agent, AgentEvent } from "../agent/agent.js";
 import { TerminalUI } from "./terminal-ui.js";
 import { Renderer } from "./renderer.js";
 import { detectToolCallMode, ToolCallMode } from "../providers/tool-capability.js";
+import type { SelectorItem } from "./selector.js";
 
 interface ReplOptions {
   agent: Agent;
@@ -60,6 +61,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
   const renderer = new Renderer(ui);
 
   ui.start();
+  ui.setCompletions(["/help", "/model", "/clear", "/tools", "/exit", "/quit"]);
   ui.setStatus(buildStatusText());
 
   async function handleSubmit(text: string): Promise<void> {
@@ -259,8 +261,7 @@ async function handleModelCommand(arg: string, agent: Agent, ui: TerminalUI): Pr
   const provider = agent.getProvider();
 
   if (!arg) {
-    ui.writeLine(chalk.dim("\nFetching models...\n"));
-
+    // Interactive selector mode
     try {
       const models = await provider.listModels();
 
@@ -270,18 +271,23 @@ async function handleModelCommand(arg: string, agent: Agent, ui: TerminalUI): Pr
       }
 
       const current = agent.getModel();
-      ui.writeLine(chalk.bold("Available models:\n"));
-
-      for (const model of models) {
+      const items: SelectorItem[] = models.map((model) => {
         const isCurrent = model.name === current || model.id === current;
-        const marker = isCurrent ? chalk.green(" (active)") : "";
-        const size = model.size ? chalk.dim(` (${formatSize(model.size)})`) : "";
-        const quant = model.quantization ? chalk.dim(` [${model.quantization}]`) : "";
-        const name = isCurrent ? chalk.green(model.name) : model.name;
-        ui.writeLine(`  ${name}${size}${quant}${marker}`);
-      }
+        const parts: string[] = [];
+        if (model.size) parts.push(formatSize(model.size));
+        if (model.quantization) parts.push(`[${model.quantization}]`);
+        return {
+          id: model.name,
+          label: model.name,
+          detail: parts.join(" "),
+          isActive: isCurrent,
+        };
+      });
 
-      ui.writeLine(chalk.dim("\nUsage: /model <name> to switch"));
+      const selected = await ui.openSelector(items, { title: "Select a model" });
+      if (selected) {
+        await switchModel(selected, agent, ui);
+      }
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       ui.writeLine(chalk.red(`Failed to list models: ${msg}`));
@@ -290,6 +296,7 @@ async function handleModelCommand(arg: string, agent: Agent, ui: TerminalUI): Pr
     return;
   }
 
+  // Direct switch by name
   try {
     const models = await provider.listModels();
     const match = models.find(
@@ -305,26 +312,29 @@ async function handleModelCommand(arg: string, agent: Agent, ui: TerminalUI): Pr
       return;
     }
 
-    const modelName = match.name;
-    agent.setModel(modelName);
-    agent.reset();
-
-    const mode = await detectToolCallMode(modelName, agent.getBaseUrl());
-    const modeLabel =
-      mode === ToolCallMode.NATIVE
-        ? chalk.green("native tools")
-        : chalk.yellow("prompt-based fallback");
-
-    ui.writeLine(
-      chalk.green(`Switched to model: ${modelName}`) +
-        chalk.dim(` | Tool mode: `) +
-        modeLabel +
-        chalk.dim(" (conversation cleared)"),
-    );
+    await switchModel(match.name, agent, ui);
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
     ui.writeLine(chalk.red(`Failed to switch model: ${msg}`));
   }
+}
+
+async function switchModel(modelName: string, agent: Agent, ui: TerminalUI): Promise<void> {
+  agent.setModel(modelName);
+  agent.reset();
+
+  const mode = await detectToolCallMode(modelName, agent.getBaseUrl());
+  const modeLabel =
+    mode === ToolCallMode.NATIVE
+      ? chalk.green("native tools")
+      : chalk.yellow("prompt-based fallback");
+
+  ui.writeLine(
+    chalk.green(`Switched to model: ${modelName}`) +
+      chalk.dim(` | Tool mode: `) +
+      modeLabel +
+      chalk.dim(" (conversation cleared)"),
+  );
 }
 
 function formatSize(bytes: number): string {

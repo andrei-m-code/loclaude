@@ -1,4 +1,5 @@
 import chalk from "chalk";
+import { Selector, type SelectorItem, type SelectorOptions } from "./selector.js";
 
 const ESC = "\x1b";
 
@@ -12,15 +13,29 @@ const BOX = {
   vertical: "│",
 };
 
+enum InputMode {
+  NORMAL,
+  SELECTOR,
+}
+
 /**
  * Terminal UI with a scrolling output area and fixed bordered input box at the bottom.
  *
- * Layout:
+ * Layout (NORMAL mode):
  *   Row 1..H-4  — Scroll region (output from agent, tool calls, etc.)
- *   Row H-3     — ┌──────────────────────────┐
- *   Row H-2     — │ > user input█            │
- *   Row H-1     — └──────────────────────────┘
+ *   Row H-3     — ──────────────── (input top rule)
+ *   Row H-2     — > user input█
+ *   Row H-1     — ──────────────── (input bottom rule)
  *   Row H       — Status line (spinner + status text)
+ *
+ * Layout (SELECTOR mode):
+ *   Row 1..S    — Scroll region (shrunk)
+ *   Row S+1     — Selector title
+ *   Row S+2..   — Selector items
+ *   Row H-3     — ──────────────── (input top rule)
+ *   Row H-2     — > /model█
+ *   Row H-1     — ──────────────── (input bottom rule)
+ *   Row H       — Status line
  *
  * Uses alternate screen buffer so the user's terminal is restored on exit.
  */
@@ -30,6 +45,17 @@ export class TerminalUI {
   private inputBuffer = "";
   private statusText = "";
   private running = false;
+
+  // Input mode state machine
+  private inputMode = InputMode.NORMAL;
+
+  // Selector overlay
+  private selector: Selector | null = null;
+  private selectorResolve: ((id: string | null) => void) | null = null;
+
+  // Ghost text autocomplete
+  private ghostText = "";
+  private completions: string[] = [];
 
   // Inline spinner (in scroll region, where text will appear)
   private inlineSpinnerTimer: ReturnType<typeof setInterval> | null = null;
@@ -109,6 +135,11 @@ export class TerminalUI {
     return this.cols;
   }
 
+  /** Get current terminal height. */
+  getRows(): number {
+    return this.rows;
+  }
+
   /** No-op kept for API compatibility. Status line always shows persistent info. */
   startSpinner(_text: string): void {
     // Hide cursor while agent is working
@@ -144,6 +175,24 @@ export class TerminalUI {
     this.raw(`${ESC}[?25h`);
     this.drawStatusLine();
     this.drawInputBox();
+  }
+
+  /** Set the list of completions for ghost text (e.g. slash commands). */
+  setCompletions(list: string[]): void {
+    this.completions = list;
+  }
+
+  /**
+   * Open an interactive selector overlay above the input box.
+   * Returns the selected item id, or null if cancelled.
+   */
+  openSelector(items: SelectorItem[], options?: SelectorOptions): Promise<string | null> {
+    return new Promise((resolve) => {
+      this.selector = new Selector(items, options ?? {}, (s) => this.raw(s));
+      this.selectorResolve = resolve;
+      this.inputMode = InputMode.SELECTOR;
+      this.renderSelector();
+    });
   }
 
   /** Start an inline spinner at the current cursor position in the scroll region.
@@ -217,14 +266,20 @@ export class TerminalUI {
   // ── Private ──────────────────────────────────────────────
 
   private applyScrollRegion(): void {
-    const scrollEnd = Math.max(1, this.rows - TerminalUI.BOTTOM_HEIGHT);
+    const selectorHeight = this.inputMode === InputMode.SELECTOR && this.selector
+      ? this.selector.getHeight()
+      : 0;
+    const scrollEnd = Math.max(1, this.rows - TerminalUI.BOTTOM_HEIGHT - selectorHeight);
     this.raw(`${ESC}[1;${scrollEnd}r`);
   }
 
   /** Move cursor to the last row of the scroll region, column 1.
    *  This makes new output appear right above the input box. */
   private moveCursorToScrollBottom(): void {
-    const scrollEnd = Math.max(1, this.rows - TerminalUI.BOTTOM_HEIGHT);
+    const selectorHeight = this.inputMode === InputMode.SELECTOR && this.selector
+      ? this.selector.getHeight()
+      : 0;
+    const scrollEnd = Math.max(1, this.rows - TerminalUI.BOTTOM_HEIGHT - selectorHeight);
     this.raw(`${ESC}[${scrollEnd};1H`);
   }
 
@@ -261,7 +316,8 @@ export class TerminalUI {
     this.raw(`${ESC}[${midRow};1H${ESC}[2K`);
     const promptPrefix = "> ";
     const cursor = this.running ? " " : "█";
-    const content = this.inputBuffer + cursor;
+    const ghost = !this.running && this.ghostText ? chalk.dim.gray(this.ghostText) : "";
+    const content = this.inputBuffer + cursor + ghost;
     const maxContent = Math.max(0, w - promptPrefix.length);
     const visible = content.length > maxContent
       ? content.slice(content.length - maxContent)
@@ -286,29 +342,37 @@ export class TerminalUI {
     }
   }
 
+  // ── Key handling ──────────────────────────────────────────
+
   private onKeypress = (data: string): void => {
-    // Skip escape sequences (arrow keys, function keys, etc.)
-    if (data.length > 1 && data.charCodeAt(0) === 27) return;
+    // Parse escape sequences into named keys
+    if (data.length > 1 && data.charCodeAt(0) === 27) {
+      // ESC [ <letter> — standard arrow keys and common sequences
+      if (data === `${ESC}[A`) { this.handleParsedKey("up"); return; }
+      if (data === `${ESC}[B`) { this.handleParsedKey("down"); return; }
+      if (data === `${ESC}[C`) { this.handleParsedKey("right"); return; }
+      if (data === `${ESC}[D`) { this.handleParsedKey("left"); return; }
+      // Unknown escape sequence — ignore
+      return;
+    }
+
+    // Single ESC character
+    if (data.length === 1 && data.charCodeAt(0) === 27) {
+      this.handleParsedKey("escape");
+      return;
+    }
 
     for (const ch of data) {
       const code = ch.charCodeAt(0);
 
-      if (code === 13) {
-        // Enter
-        const text = this.inputBuffer;
-        this.inputBuffer = "";
-        this.drawInputBox();
-        if (text.trim()) {
-          this.onSubmit(text.trim());
-        }
+      if (code === 9) {
+        this.handleParsedKey("tab");
+      } else if (code === 13) {
+        this.handleParsedKey("enter");
       } else if (code === 127 || code === 8) {
-        // Backspace
-        if (this.inputBuffer.length > 0) {
-          this.inputBuffer = this.inputBuffer.slice(0, -1);
-          this.drawInputBox();
-        }
+        this.handleParsedKey("backspace");
       } else if (code === 3) {
-        // Ctrl+C
+        // Ctrl+C — always handle directly
         this.onInterrupt();
       } else if (code === 4) {
         // Ctrl+D — exit
@@ -327,17 +391,149 @@ export class TerminalUI {
         this.drawBottomBar();
         this.moveCursorToScrollBottom();
       } else if (code >= 32) {
-        if (!this.running) {
-          this.inputBuffer += ch;
-          this.drawInputBox();
-        }
+        this.handleParsedKey(ch);
       }
     }
   };
 
+  private handleParsedKey(key: string): void {
+    if (this.inputMode === InputMode.SELECTOR) {
+      this.handleSelectorKey(key);
+    } else {
+      this.handleNormalKey(key);
+    }
+  }
+
+  private handleNormalKey(key: string): void {
+    switch (key) {
+      case "enter": {
+        const text = this.inputBuffer;
+        this.inputBuffer = "";
+        this.ghostText = "";
+        this.drawInputBox();
+        if (text.trim()) {
+          this.onSubmit(text.trim());
+        }
+        break;
+      }
+      case "backspace":
+        if (this.inputBuffer.length > 0) {
+          this.inputBuffer = this.inputBuffer.slice(0, -1);
+          this.updateGhostText();
+          this.drawInputBox();
+        }
+        break;
+      case "tab":
+        if (this.ghostText) {
+          this.inputBuffer += this.ghostText;
+          this.ghostText = "";
+          this.drawInputBox();
+        }
+        break;
+      case "escape":
+        if (this.ghostText) {
+          this.ghostText = "";
+          this.drawInputBox();
+        }
+        break;
+      case "up":
+      case "down":
+      case "left":
+      case "right":
+        // Arrow keys in normal mode — ignore for now
+        break;
+      default:
+        // Printable character
+        if (!this.running && key.length === 1) {
+          this.inputBuffer += key;
+          this.updateGhostText();
+          this.drawInputBox();
+        }
+        break;
+    }
+  }
+
+  private handleSelectorKey(key: string): void {
+    if (!this.selector) return;
+
+    const result = this.selector.handleKey(key);
+
+    if (result) {
+      // Final action — dismiss selector
+      const id = result.type === "select" ? result.id : null;
+      this.dismissSelector();
+      this.selectorResolve?.(id);
+      this.selectorResolve = null;
+    } else {
+      // Key consumed — re-render selector
+      this.renderSelector();
+    }
+  }
+
+  // ── Ghost text ──────────────────────────────────────────
+
+  private updateGhostText(): void {
+    this.ghostText = "";
+    const buf = this.inputBuffer;
+    if (!buf.startsWith("/") || buf.length === 0) return;
+
+    const lc = buf.toLowerCase();
+    for (const completion of this.completions) {
+      if (completion.toLowerCase().startsWith(lc) && completion.length > buf.length) {
+        this.ghostText = completion.slice(buf.length);
+        return;
+      }
+    }
+  }
+
+  // ── Selector overlay ──────────────────────────────────────
+
+  private renderSelector(): void {
+    if (!this.selector) return;
+
+    // Shrink scroll region to make room for the selector
+    this.applyScrollRegion();
+
+    const selectorHeight = this.selector.getHeight();
+    const selectorStartRow = this.rows - TerminalUI.BOTTOM_HEIGHT - selectorHeight + 1;
+
+    this.raw(`${ESC}7`); // save cursor
+    this.selector.render(selectorStartRow, this.cols);
+    this.drawInputBox_raw();
+    this.drawStatusLine_raw();
+    this.raw(`${ESC}8`); // restore cursor
+  }
+
+  private dismissSelector(): void {
+    if (!this.selector) return;
+
+    const selectorHeight = this.selector.getHeight();
+    const selectorStartRow = this.rows - TerminalUI.BOTTOM_HEIGHT - selectorHeight + 1;
+
+    this.raw(`${ESC}7`); // save cursor
+    this.selector.clear(selectorStartRow);
+    this.raw(`${ESC}8`); // restore cursor
+
+    this.selector = null;
+    this.inputMode = InputMode.NORMAL;
+
+    // Restore full scroll region
+    this.applyScrollRegion();
+    this.drawBottomBar();
+    this.moveCursorToScrollBottom();
+  }
+
   private onResize = (): void => {
     this.rows = Math.max(TerminalUI.MIN_ROWS, process.stdout.rows ?? 24);
     this.cols = Math.max(TerminalUI.MIN_COLS, process.stdout.columns ?? 80);
+
+    // Dismiss selector on resize to avoid layout corruption
+    if (this.inputMode === InputMode.SELECTOR && this.selector) {
+      this.selector = null;
+      this.inputMode = InputMode.NORMAL;
+      this.selectorResolve?.(null);
+      this.selectorResolve = null;
+    }
 
     // Pause inline spinner during redraw (will be restarted after)
     const hadInlineSpinner = this.inlineSpinnerTimer !== null;
