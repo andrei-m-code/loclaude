@@ -16,15 +16,17 @@ export class Renderer {
     if (summary) {
       line += chalk.dim(` ${summary}`);
     }
-    this.ui.writeLine(line);
+    this.ui.writeLine(this.truncateLine(line));
   }
 
   renderToolResult(_toolName: string, result: string, isError: boolean): void {
-    const truncated = result.length > 200 ? result.slice(0, 200) + "..." : result;
+    // Collapse to first line only and truncate for display
+    const firstLine = result.split("\n")[0] ?? result;
+    const truncated = firstLine.length > 200 ? firstLine.slice(0, 200) + "..." : firstLine;
     if (isError) {
-      this.ui.writeLine(chalk.red(`  ✗ `) + chalk.dim(truncated));
+      this.ui.writeLine(this.truncateLine(chalk.red(`  ✗ `) + chalk.dim(truncated)));
     } else {
-      this.ui.writeLine(chalk.green(`  ✓ `) + chalk.dim(truncated));
+      this.ui.writeLine(this.truncateLine(chalk.green(`  ✓ `) + chalk.dim(truncated)));
     }
   }
 
@@ -32,13 +34,13 @@ export class Renderer {
     this.ui.writeLine(chalk.dim("  Plan:"));
     for (const step of steps) {
       const toolLabel = step.tool !== "none" ? chalk.cyan(` [${step.tool}]`) : "";
-      this.ui.writeLine(chalk.dim(`  ${step.number}. ${step.description}`) + toolLabel);
+      this.ui.writeLine(this.truncateLine(chalk.dim(`  ${step.number}. ${step.description}`) + toolLabel));
     }
     this.ui.writeLine("");
   }
 
   renderStepStart(stepNumber: number, totalSteps: number, description: string): void {
-    this.ui.writeLine(chalk.bold(`Step ${stepNumber}/${totalSteps}: ${description}`));
+    this.ui.writeLine(this.truncateLine(chalk.bold(`Step ${stepNumber}/${totalSteps}: ${description}`)));
   }
 
   renderStepEnd(stepNumber: number, success: boolean): void {
@@ -52,6 +54,37 @@ export class Renderer {
 
   renderWarning(message: string): void {
     this.ui.writeLine(chalk.yellow(`Warning: ${message}`));
+  }
+
+  /**
+   * Truncate a line to terminal width. Strips ANSI codes for length calculation,
+   * but preserves them in output. Appends "…" if truncated.
+   */
+  private truncateLine(line: string): string {
+    const width = this.ui.getWidth();
+    if (width <= 0) return line;
+
+    // Strip ANSI escape codes for visible length calculation
+    // eslint-disable-next-line no-control-regex
+    const visibleLength = line.replace(/\x1b\[[0-9;]*m/g, "").length;
+    if (visibleLength <= width) return line;
+
+    // Truncate by walking through chars, counting visible length
+    let visible = 0;
+    let i = 0;
+    while (i < line.length && visible < width - 1) {
+      if (line[i] === "\x1b") {
+        // Skip ANSI sequence
+        const end = line.indexOf("m", i);
+        if (end !== -1) {
+          i = end + 1;
+          continue;
+        }
+      }
+      visible++;
+      i++;
+    }
+    return line.slice(0, i) + "…" + "\x1b[0m"; // reset after truncation
   }
 
   private getToolIcon(toolName: string): string {

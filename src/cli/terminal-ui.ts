@@ -39,6 +39,9 @@ export class TerminalUI {
 
   // Bottom bar height: status + 3 lines for bordered input box
   private static BOTTOM_HEIGHT = 4;
+  // Minimum terminal dimensions to prevent layout breakage
+  private static MIN_ROWS = 8;
+  private static MIN_COLS = 20;
 
   // Callbacks
   private onSubmit: (input: string) => void;
@@ -50,8 +53,8 @@ export class TerminalUI {
   }
 
   start(): void {
-    this.rows = process.stdout.rows ?? 24;
-    this.cols = process.stdout.columns ?? 80;
+    this.rows = Math.max(TerminalUI.MIN_ROWS, process.stdout.rows ?? 24);
+    this.cols = Math.max(TerminalUI.MIN_COLS, process.stdout.columns ?? 80);
 
     // Alternate screen buffer
     this.raw(`${ESC}[?1049h`);
@@ -93,12 +96,18 @@ export class TerminalUI {
 
   /** Write text into the scrolling output area. Supports partial writes (streaming). */
   write(text: string): void {
+    // Ensure cursor is within the scroll region before writing
     this.raw(text);
   }
 
   /** Write a complete line into the scrolling output area. */
   writeLine(text: string): void {
     this.write(text + "\n");
+  }
+
+  /** Get current terminal width (useful for renderers that need to wrap/truncate). */
+  getWidth(): number {
+    return this.cols;
   }
 
   /** No-op kept for API compatibility. Status line always shows persistent info. */
@@ -239,23 +248,24 @@ export class TerminalUI {
     // Top rule — row H-3
     const topRow = this.rows - 3;
     this.raw(`${ESC}[${topRow};1H${ESC}[2K`);
-    this.raw(chalk.dim(BOX.horizontal.repeat(w)));
+    this.raw(chalk.dim(BOX.horizontal.repeat(Math.min(w, this.cols))));
 
     // Input content — row H-2
     const midRow = this.rows - 2;
     this.raw(`${ESC}[${midRow};1H${ESC}[2K`);
+    const promptPrefix = "> ";
     const cursor = this.running ? " " : "█";
     const content = this.inputBuffer + cursor;
-    const maxContent = Math.max(0, w - 2); // space for "> " prompt
+    const maxContent = Math.max(0, w - promptPrefix.length);
     const visible = content.length > maxContent
       ? content.slice(content.length - maxContent)
       : content;
-    this.raw(chalk.bold.green("> ") + visible);
+    this.raw(chalk.bold.green(promptPrefix) + visible);
 
     // Bottom rule — row H-1
     const botRow = this.rows - 1;
     this.raw(`${ESC}[${botRow};1H${ESC}[2K`);
-    this.raw(chalk.dim(BOX.horizontal.repeat(w)));
+    this.raw(chalk.dim(BOX.horizontal.repeat(Math.min(w, this.cols))));
   }
 
   /** Write status line below the input box. Caller must save/restore cursor. */
@@ -263,7 +273,10 @@ export class TerminalUI {
     const row = this.rows;
     this.raw(`${ESC}[${row};1H${ESC}[2K`);
     if (this.statusText) {
-      this.raw(chalk.dim(`  ${this.statusText}`));
+      // Truncate to terminal width to prevent wrapping
+      const text = `  ${this.statusText}`;
+      const visible = text.length > this.cols ? text.slice(0, this.cols) : text;
+      this.raw(chalk.dim(visible));
     }
   }
 
@@ -300,7 +313,9 @@ export class TerminalUI {
         this.stop();
         process.exit(0);
       } else if (code === 12) {
-        // Ctrl+L — redraw
+        // Ctrl+L — full redraw (also re-reads terminal size)
+        this.rows = Math.max(TerminalUI.MIN_ROWS, process.stdout.rows ?? 24);
+        this.cols = Math.max(TerminalUI.MIN_COLS, process.stdout.columns ?? 80);
         this.raw(`${ESC}[2J`);
         this.applyScrollRegion();
         this.raw(`${ESC}[1;1H`);
@@ -316,10 +331,28 @@ export class TerminalUI {
   };
 
   private onResize = (): void => {
-    this.rows = process.stdout.rows ?? 24;
-    this.cols = process.stdout.columns ?? 80;
+    this.rows = Math.max(TerminalUI.MIN_ROWS, process.stdout.rows ?? 24);
+    this.cols = Math.max(TerminalUI.MIN_COLS, process.stdout.columns ?? 80);
+
+    // Pause inline spinner during redraw (will be restarted after)
+    const hadInlineSpinner = this.inlineSpinnerTimer !== null;
+    const savedSpinnerStart = this.inlineSpinnerStart;
+    if (hadInlineSpinner) {
+      clearInterval(this.inlineSpinnerTimer!);
+      this.inlineSpinnerTimer = null;
+    }
+
+    // Full redraw: clear screen, reapply layout, redraw fixed areas
+    this.raw(`${ESC}[2J`);          // clear entire alternate screen
     this.applyScrollRegion();
+    this.raw(`${ESC}[1;1H`);        // cursor to top-left of scroll region
     this.drawBottomBar();
+    this.raw(`${ESC}[1;1H`);        // cursor back into scroll region
+
+    // Resume inline spinner if it was active
+    if (hadInlineSpinner) {
+      this.startInlineSpinner(savedSpinnerStart);
+    }
   };
 
   private raw(text: string): void {
