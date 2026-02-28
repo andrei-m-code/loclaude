@@ -1,7 +1,7 @@
 import * as path from "node:path";
 import chalk from "chalk";
 import type { Agent, AgentEvent } from "../agent/agent.js";
-import { TerminalUI } from "./terminal-ui.js";
+import { TerminalUI, formatElapsed } from "./terminal-ui.js";
 import { Renderer } from "./renderer.js";
 import { detectToolCallMode, ToolCallMode } from "../providers/tool-capability.js";
 import type { SelectorItem } from "./selector.js";
@@ -195,8 +195,7 @@ export async function startRepl(options: ReplOptions): Promise<never> {
     }
     // Report elapsed time
     const elapsed = (Date.now() - requestStart) / 1000;
-    const timeStr = elapsed < 100 ? elapsed.toFixed(1) + "s" : Math.floor(elapsed) + "s";
-    ui.writeLine(chalk.dim(`  Done in ${timeStr}`));
+    ui.writeLine(chalk.dim(`  Done in ${formatElapsed(elapsed)}`));
     ui.writeLine(""); // blank line after response
     ui.stopSpinner();
     // Restore persistent status with token counts and current dir
@@ -239,6 +238,7 @@ async function handleSlashCommand(
 
     case "/clear":
       agent.reset();
+      ui.clearScreen();
       ui.writeLine(chalk.dim("Conversation cleared."));
       break;
 

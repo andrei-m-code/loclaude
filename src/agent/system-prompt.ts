@@ -103,6 +103,20 @@ function buildToolUsageGuidelines(options: SystemPromptOptions): string {
 
   const lines: string[] = ["## Tool Tips"];
 
+  // -- Use the right tool (not bash) --
+  lines.push(`
+### Use the Right Tool
+Do NOT use bash when a dedicated tool exists:
+- Read files → **file_read** (not \`cat\` or \`head\`)
+- Write/create files → **file_write** (not \`echo >\` or \`cat >\`)
+- Edit files → **file_edit** (not \`sed\` or \`awk\`)
+- Delete a single file → **file_delete** (not \`rm\`)
+- Find files by name → **glob** (not \`find\`)
+- Search file contents → **grep** (not \`grep\` or \`rg\` via bash)
+- List directory → **list_directory** (not \`ls\`)
+
+Use bash ONLY for: builds, tests, git, package installs, running programs, and commands with no dedicated tool.`);
+
   if (toolNames.has("file_read")) {
     lines.push("- **file_read**: Always read a file before modifying it. Use offset/limit for large files.");
   }
@@ -112,11 +126,34 @@ function buildToolUsageGuidelines(options: SystemPromptOptions): string {
   }
 
   if (toolNames.has("file_write")) {
-    lines.push("- **file_write**: Read existing file first before overwriting.");
+    lines.push("- **file_write**: Read existing file first before overwriting. Creates parent directories automatically.");
+  }
+
+  if (toolNames.has("file_delete")) {
+    lines.push("- **file_delete**: Deletes a single file or empty directory. For non-empty directories, use bash: `rm -rf dir/`");
   }
 
   if (toolNames.has("bash")) {
-    lines.push(`- **bash**: All commands run from \`${cwd}\` by default. To run in a subdirectory, use the \`working_directory\` parameter — do NOT use \`cd\`. No global installs, no interactive commands, no sudo.`);
+    lines.push(`
+### Bash Usage
+- All commands run from \`${cwd}\` by default. Use \`working_directory\` parameter for subdirectories — do NOT use \`cd\`.
+- No sudo, no interactive commands (vi, nano, less), no global installs.
+- Common patterns:
+  - Remove non-empty directory: \`rm -rf dirname/\` (NOT \`rmdir\` — that only works on empty dirs)
+  - Create nested directories: \`mkdir -p a/b/c\`
+  - Copy recursively: \`cp -r src/ dest/\`
+  - Move/rename: \`mv old new\`
+  - Run in background: append \`&\`
+  - Chain commands: \`cmd1 && cmd2\` (stop on failure) or \`cmd1; cmd2\` (always continue)
+  - Redirect output: \`cmd > file.txt 2>&1\`
+
+### When a Command Fails
+Do NOT retry the same command. Instead:
+- Read the error message carefully
+- If "not found" or "No such file" → use glob or list_directory to find the correct path
+- If "Permission denied" → check if the file exists and you have the right path
+- If missing flags → check the command's correct usage (e.g., \`rm -rf\` not \`rm\`, \`mkdir -p\` not \`mkdir\`)
+- If a tool fails → try a different tool or approach entirely`);
   }
 
   if (toolNames.has("list_directory")) {
@@ -208,7 +245,7 @@ When the user asks you to modify code, fix bugs, or add features — you MUST se
 - Use the project structure above to pick search patterns — reference actual directories you can see
 - One logical action per step — be specific with file paths and search patterns
 - Read files before editing — understand existing code, style, and structure
-- Include verification as the final step (build, run tests, etc.)
+- Do NOT add a verification/check step — verification is handled automatically after execution
 - Use the right tool: glob to find files, grep to search content, file_read to examine, file_edit for targeted changes, file_write to create new files, bash for commands
 - **NEVER use \`cd\` to switch directories.** All tools accept paths relative to workspace root (e.g., \`subdir/file.txt\`). For bash, use the \`working_directory\` parameter to run commands in subdirectories.`);
 

@@ -3,6 +3,21 @@ import { Selector, type SelectorItem, type SelectorOptions } from "./selector.js
 
 const ESC = "\x1b";
 
+/** Format elapsed seconds into a human-readable string (e.g. "1.2s", "2m 15s", "1h 3m"). */
+export function formatElapsed(seconds: number): string {
+  if (seconds < 60) {
+    return seconds < 100 ? seconds.toFixed(1) + "s" : Math.floor(seconds) + "s";
+  }
+  const mins = Math.floor(seconds / 60);
+  const secs = Math.floor(seconds % 60);
+  if (mins < 60) {
+    return secs > 0 ? `${mins}m ${secs}s` : `${mins}m`;
+  }
+  const hrs = Math.floor(mins / 60);
+  const remMins = mins % 60;
+  return remMins > 0 ? `${hrs}h ${remMins}m` : `${hrs}h`;
+}
+
 // Box-drawing characters
 const BOX = {
   topLeft: "┌",
@@ -177,6 +192,14 @@ export class TerminalUI {
     this.drawInputBox();
   }
 
+  /** Clear the entire scroll region (wipes all chat output). */
+  clearScreen(): void {
+    this.raw(`${ESC}[2J`);
+    this.applyScrollRegion();
+    this.drawBottomBar();
+    this.moveCursorToScrollBottom();
+  }
+
   /** Set the list of completions for ghost text (e.g. slash commands). */
   setCompletions(list: string[]): void {
     this.completions = list;
@@ -228,11 +251,8 @@ export class TerminalUI {
 
   /** Build a single inline spinner frame — color-cycling pulse bar + elapsed time. */
   private getInlineFrame(idx: number): string {
-    // Elapsed time (fixed 5-char width)
     const elapsed = (Date.now() - this.inlineSpinnerStart) / 1000;
-    const timeStr = elapsed < 100
-      ? elapsed.toFixed(1) + "s"
-      : Math.floor(elapsed) + "s";
+    const timeStr = formatElapsed(elapsed);
     const timePart = chalk.dim(timeStr.padStart(5));
 
     // Color-cycling bar (3 chars)

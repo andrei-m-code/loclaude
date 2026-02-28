@@ -205,11 +205,11 @@ export class Agent {
       yield { type: "step_end", stepNumber: i + 1, success: true };
     }
 
-    // Phase 3: VERIFY — let model check its own work (can use tools)
+    // Phase 3: VERIFY — text-only summary (no tools, just reflect on what was done)
     this.conversation.addUserMessage(
-      `All steps complete. Briefly verify: did you fully accomplish "${userMessage}"? If anything is missing, fix it now. Then summarize what was done.`
+      `All steps complete. Briefly summarize what was done to accomplish "${userMessage}". Do NOT call any tools — just summarize based on the results above.`
     );
-    yield* this.runToolLoop(isFallback, 3); // max 3 turns for verification
+    yield* this.runToolLoop(isFallback, 1); // single turn, text-only summary
 
     yield { type: "loop_complete", totalTurns: steps.length + 2 };
   }
@@ -473,7 +473,8 @@ export class Agent {
   ): Promise<{ result: string; isError: boolean }> {
     try {
       const toolResult = await this.toolRegistry.executeTool(tc.toolName, tc.arguments);
-      return { result: toolResult.output, isError: false };
+      const output = this.addBashFailureGuidance(tc.toolName, toolResult.output);
+      return { result: output, isError: false };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
       const guidance = this.getErrorGuidance(tc.toolName, message);
@@ -500,8 +501,45 @@ export class Agent {
       hints.push("Check the tool's required parameters. Re-read the tool description for correct argument names.");
     }
 
+    if (error.includes("ENOTEMPTY") || error.includes("not empty") || error.includes("Directory not empty")) {
+      hints.push("Directory is not empty. Use bash with `rm -rf dirname/` to remove non-empty directories.");
+    }
+
     if (hints.length === 0) return "";
     return "\n\nHINT: " + hints.join(" ");
+  }
+
+  /**
+   * Post-process successful tool results to add guidance when bash commands
+   * fail (non-zero exit code) but don't throw exceptions.
+   */
+  private addBashFailureGuidance(toolName: string, result: string): string {
+    if (toolName !== "bash") return result;
+
+    // Check for non-zero exit code
+    const exitMatch = result.match(/\[Exit code: (\d+)\]/);
+    if (!exitMatch || exitMatch[1] === "0") return result;
+
+    const hints: string[] = [];
+
+    if (result.includes("No such file or directory")) {
+      hints.push("Path does not exist. Use `glob` or `list_directory` to find the correct path.");
+    }
+    if (result.includes("rmdir") && result.includes("not empty")) {
+      hints.push("Use `rm -rf dirname/` instead of `rmdir` for non-empty directories.");
+    }
+    if (result.includes("command not found")) {
+      hints.push("Command not installed. Check if the command name is correct or install it first.");
+    }
+    if (result.includes("Permission denied")) {
+      hints.push("Permission denied. Check the file path and permissions.");
+    }
+
+    if (hints.length > 0) {
+      return result + "\n\nHINT: " + hints.join(" ") + " Do NOT retry the same command — fix the issue first.";
+    }
+
+    return result + "\n\nThe command failed. Read the error output above carefully. Do NOT retry the same command — try a different approach.";
   }
 
   private buildContextBlock(): string {
