@@ -2,6 +2,8 @@ import chalk from "chalk";
 import type { TerminalUI } from "./terminal-ui.js";
 import type { PlanStep } from "../agent/agent.js";
 
+const BOX_H = "─";
+
 export class Renderer {
   private ui: TerminalUI;
 
@@ -31,21 +33,30 @@ export class Renderer {
   }
 
   renderPlan(steps: PlanStep[]): void {
-    this.ui.writeLine(chalk.dim("  Plan:"));
+    this.ui.writeLine("");
+    const ruleWidth = Math.min(50, this.ui.getWidth() - 2);
+    this.ui.writeLine(chalk.dim(`  ${BOX_H.repeat(ruleWidth)}`));
+    this.ui.writeLine(chalk.bold("  Plan"));
+    this.ui.writeLine("");
     for (const step of steps) {
-      const toolLabel = step.tool !== "none" ? chalk.cyan(` [${step.tool}]`) : "";
-      this.ui.writeLine(this.truncateLine(chalk.dim(`  ${step.number}. ${step.description}`) + toolLabel));
+      const num = chalk.bold.cyan(`  ${step.number}.`);
+      const desc = step.description;
+      const toolLabel = step.tool !== "none" ? chalk.dim(` [${step.tool}]`) : "";
+      this.ui.writeLine(this.truncateLine(`${num} ${desc}${toolLabel}`));
     }
+    this.ui.writeLine(chalk.dim(`  ${BOX_H.repeat(ruleWidth)}`));
     this.ui.writeLine("");
   }
 
   renderStepStart(stepNumber: number, totalSteps: number, description: string): void {
-    this.ui.writeLine(this.truncateLine(chalk.bold(`Step ${stepNumber}/${totalSteps}: ${description}`)));
+    this.ui.writeLine("");
+    const badge = chalk.bgCyan.black.bold(` ${stepNumber}/${totalSteps} `);
+    this.ui.writeLine(this.truncateLine(`${badge} ${chalk.bold(description)}`));
   }
 
-  renderStepEnd(stepNumber: number, success: boolean): void {
-    const icon = success ? chalk.green("✓") : chalk.red("✗");
-    this.ui.writeLine(chalk.dim(`  ${icon} Step ${stepNumber} done`));
+  renderStepEnd(_stepNumber: number, success: boolean): void {
+    const icon = success ? chalk.green("  ✓ done") : chalk.red("  ✗ failed");
+    this.ui.writeLine(chalk.dim(icon));
   }
 
   renderError(error: Error): void {

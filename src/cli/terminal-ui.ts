@@ -76,7 +76,7 @@ export class TerminalUI {
   private inlineSpinnerTimer: ReturnType<typeof setInterval> | null = null;
   private inlineSpinnerIdx = 0;
   private inlineSpinnerStart = 0;
-  private inlineFrameWidth = 9; // visible chars: "▰▱▱  0.0s"
+  private inlineFrameWidth = 11; // visible chars: "▰▱▱  00m 00s"
 
   // Bottom bar height: status + 3 lines for bordered input box
   private static BOTTOM_HEIGHT = 4;
@@ -253,7 +253,7 @@ export class TerminalUI {
   private getInlineFrame(idx: number): string {
     const elapsed = (Date.now() - this.inlineSpinnerStart) / 1000;
     const timeStr = formatElapsed(elapsed);
-    const timePart = chalk.dim(timeStr.padStart(5));
+    const timePart = chalk.dim(timeStr.padStart(7));
 
     // Color-cycling bar (3 chars)
     const bar = (filled: number, color: (s: string) => string): string => {

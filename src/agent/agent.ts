@@ -206,10 +206,12 @@ export class Agent {
     }
 
     // Phase 3: VERIFY — text-only summary (no tools, just reflect on what was done)
+    yield { type: "step_start", stepNumber: steps.length + 1, totalSteps: steps.length + 1, description: "Summary" };
     this.conversation.addUserMessage(
       `All steps complete. Briefly summarize what was done to accomplish "${userMessage}". Do NOT call any tools — just summarize based on the results above.`
     );
     yield* this.runToolLoop(isFallback, 1); // single turn, text-only summary
+    yield { type: "step_end", stepNumber: steps.length + 1, success: true };
 
     yield { type: "loop_complete", totalTurns: steps.length + 2 };
   }

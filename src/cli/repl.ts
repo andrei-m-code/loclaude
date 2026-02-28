@@ -137,6 +137,12 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             break;
 
           case "turn_complete":
+            // Brief indicator that the model is continuing with more actions
+            ui.stopInlineSpinner();
+            ui.writeLine(chalk.dim("  ↳ continuing..."));
+            ui.startSpinner("Thinking...");
+            firstTextChunk = true;
+            ui.startInlineSpinner(requestStart);
             break;
 
           case "loop_complete":
