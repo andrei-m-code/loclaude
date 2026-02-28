@@ -1,5 +1,6 @@
 import { loadConfig } from "./config/index.js";
 import { createProvider } from "./providers/factory.js";
+import { getModelDefaults } from "./providers/model-defaults.js";
 import { ToolRegistry } from "./tools/registry.js";
 import { FileReadTool } from "./tools/file-read.js";
 import { FileWriteTool } from "./tools/file-write.js";
@@ -51,7 +52,9 @@ async function main() {
     workspaceContext,
   });
 
-  // 5. Create agent
+  // 5. Create agent (model defaults as base, explicit config overrides)
+  const modelDefaults = getModelDefaults(config.provider.model);
+
   const agent = new Agent({
     provider,
     toolRegistry,
@@ -61,9 +64,12 @@ async function main() {
       baseUrl: config.provider.baseUrl,
       workingDirectory: process.cwd(),
       workspaceContext,
-      temperature: config.provider.temperature,
+      temperature: config.provider.temperature ?? modelDefaults.temperature,
       maxTokens: config.provider.maxTokens,
       maxTurns: config.agent.maxToolTurns,
+      maxContextChars: config.agent.maxContextChars,
+      maxToolResultLength: config.agent.maxToolResultLength ?? modelDefaults.maxToolResultLength,
+      contextWindow: config.provider.contextWindow ?? modelDefaults.numCtx,
     },
   });
 

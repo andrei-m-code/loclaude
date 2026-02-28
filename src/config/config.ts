@@ -31,6 +31,8 @@ export interface Config {
 
   agent: {
     maxToolTurns: number;
+    maxContextChars?: number;
+    maxToolResultLength?: number;
     systemPromptAppend?: string;
     systemPromptOverride?: string;
   };

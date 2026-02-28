@@ -40,6 +40,7 @@ export interface ChatRequest {
   temperature?: number;
   maxTokens?: number;
   stop?: string[];
+  contextWindow?: number;
 }
 
 export interface ChatResponse {

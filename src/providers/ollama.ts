@@ -190,15 +190,21 @@ export class OllamaProvider implements LLMProvider {
   ): Record<string, unknown> {
     const messages = this.toOllamaMessages(request.messages, request.systemPrompt);
 
+    const options: Record<string, unknown> = {
+      temperature: request.temperature,
+      num_predict: request.maxTokens,
+      stop: request.stop,
+    };
+
+    if (request.contextWindow) {
+      options.num_ctx = request.contextWindow;
+    }
+
     const body: Record<string, unknown> = {
       model: request.model ?? this.defaultModel,
       messages,
       stream,
-      options: {
-        temperature: request.temperature,
-        num_predict: request.maxTokens,
-        stop: request.stop,
-      },
+      options,
     };
 
     if (request.tools?.length) {

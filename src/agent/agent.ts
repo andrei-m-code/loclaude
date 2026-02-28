@@ -59,9 +59,18 @@ export interface AgentConfig {
   maxTurns?: number;
   maxContextChars?: number;
   maxToolResultLength?: number;
+  contextWindow?: number;
 }
 
 // -- Agent --
+
+// -- Tool History Entry --
+
+interface ToolHistoryEntry {
+  tool: string;
+  summary: string;
+  isError: boolean;
+}
 
 export class Agent {
   private provider: LLMProvider;
@@ -70,6 +79,8 @@ export class Agent {
   private config: AgentConfig;
   private maxTurns: number;
   private toolCallMode: ToolCallMode | null = null;
+  private currentUserRequest = "";
+  private toolHistory: ToolHistoryEntry[] = [];
 
   constructor(options: {
     provider: LLMProvider;
@@ -92,6 +103,8 @@ export class Agent {
       this.toolCallMode = await detectToolCallMode(this.config.model, this.config.baseUrl);
     }
 
+    this.currentUserRequest = userMessage;
+    this.toolHistory = [];
     this.conversation.addUserMessage(userMessage);
     const isFallback = this.toolCallMode === ToolCallMode.FALLBACK;
 
@@ -110,6 +123,7 @@ export class Agent {
       // NO tools — forces text-only planning output
       temperature: this.config.temperature ?? 0.1,
       maxTokens: this.config.maxTokens,
+      contextWindow: this.config.contextWindow,
     });
 
     for await (const chunk of stream) {
@@ -146,8 +160,17 @@ export class Agent {
           toolResults.push({ toolName: tc.toolName, result, isError });
         }
 
+        // Track tool calls in history
+        for (const tr of toolResults) {
+          this.toolHistory.push({
+            tool: tr.toolName,
+            summary: tr.isError ? `ERROR: ${tr.result.slice(0, 80)}` : `OK (${tr.result.length} chars)`,
+            isError: tr.isError,
+          });
+        }
+
         // Add results as user message (fallback mode uses role:user for results)
-        const resultContent = buildFallbackToolResultMessage(toolResults);
+        const resultContent = buildFallbackToolResultMessage(toolResults, this.currentUserRequest);
         this.conversation.addUserMessage(resultContent);
 
         // Continue with tool loop for follow-up
@@ -222,6 +245,8 @@ export class Agent {
 
   reset(): void {
     this.conversation.clear();
+    this.currentUserRequest = "";
+    this.toolHistory = [];
   }
 
   getHistory() {
@@ -240,14 +265,21 @@ export class Agent {
    */
   private async *runToolLoop(isFallback: boolean, maxTurnsOverride?: number): AsyncIterable<AgentEvent> {
     const maxTurns = maxTurnsOverride ?? this.maxTurns;
-    let systemPrompt = this.conversation.getSystemPrompt();
+    const baseSystemPrompt = this.conversation.getSystemPrompt();
     const tools = this.toolRegistry.getToolDefinitions();
 
-    if (isFallback && tools.length > 0) {
-      systemPrompt += "\n\n" + buildFallbackToolPrompt(tools);
-    }
-
     for (let turn = 1; turn <= maxTurns; turn++) {
+      // Build system prompt with context block for this turn
+      let systemPrompt = baseSystemPrompt;
+
+      if (isFallback && tools.length > 0) {
+        systemPrompt += "\n\n" + buildFallbackToolPrompt(tools);
+      }
+
+      // Add running context / scratchpad
+      if (this.toolHistory.length > 0 || this.currentUserRequest) {
+        systemPrompt += "\n\n" + this.buildContextBlock();
+      }
       let accumulatedText = "";
       const pendingToolCalls: Array<{
         toolCallId: string;
@@ -262,6 +294,7 @@ export class Agent {
         tools: !isFallback && tools.length > 0 ? tools : undefined,
         temperature: this.config.temperature ?? 0.1,
         maxTokens: this.config.maxTokens,
+        contextWindow: this.config.contextWindow,
       });
 
       for await (const chunk of stream) {
@@ -334,6 +367,13 @@ export class Agent {
       for (const tc of allToolCalls) {
         const { result: toolOutput, isError } = await this.executeTool(tc);
 
+        // Track in tool history
+        this.toolHistory.push({
+          tool: tc.toolName,
+          summary: isError ? `ERROR: ${toolOutput.slice(0, 80)}` : `OK (${toolOutput.length} chars)`,
+          isError,
+        });
+
         yield {
           type: "tool_result",
           toolCallId: tc.toolCallId,
@@ -350,7 +390,7 @@ export class Agent {
       }
 
       if (isFallback && toolResults.length > 0) {
-        const resultContent = buildFallbackToolResultMessage(toolResults);
+        const resultContent = buildFallbackToolResultMessage(toolResults, this.currentUserRequest);
         this.conversation.addUserMessage(resultContent);
       }
 
@@ -436,8 +476,48 @@ export class Agent {
       return { result: toolResult.output, isError: false };
     } catch (err) {
       const message = err instanceof Error ? err.message : String(err);
-      return { result: `Error: ${message}`, isError: true };
+      const guidance = this.getErrorGuidance(tc.toolName, message);
+      return { result: `Error: ${message}${guidance}`, isError: true };
     }
+  }
+
+  private getErrorGuidance(toolName: string, error: string): string {
+    const hints: string[] = [];
+
+    if (error.includes("ENOENT") || error.includes("not found") || error.includes("No such file")) {
+      hints.push("The file/path does not exist. Use `glob` to search for files or `list_directory` to browse.");
+    }
+
+    if (error.includes("EACCES") || error.includes("permission denied")) {
+      hints.push("Permission denied. Try a different path or check file permissions.");
+    }
+
+    if (error.includes("Unknown tool") || error.includes("not registered")) {
+      hints.push("That tool does not exist. Check the available tools list in the system prompt.");
+    }
+
+    if (error.includes("validation") || error.includes("required")) {
+      hints.push("Check the tool's required parameters. Re-read the tool description for correct argument names.");
+    }
+
+    if (hints.length === 0) return "";
+    return "\n\nHINT: " + hints.join(" ");
+  }
+
+  private buildContextBlock(): string {
+    let block = "[Context]\n";
+    block += `User request: ${this.currentUserRequest}\n`;
+
+    if (this.toolHistory.length > 0) {
+      block += "Tool calls so far:\n";
+      for (const entry of this.toolHistory.slice(-10)) { // last 10 calls
+        const status = entry.isError ? "FAILED" : "OK";
+        block += `  - ${entry.tool}: ${status} — ${entry.summary}\n`;
+      }
+    }
+
+    block += "Next: Call a tool to make progress, or respond to the user if the task is complete.";
+    return block;
   }
 }
 

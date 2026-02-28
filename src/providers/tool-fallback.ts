@@ -17,21 +17,38 @@ export function buildFallbackToolPrompt(tools: ToolDefinition[]): string {
       properties?: Record<string, { type?: string; description?: string }>;
       required?: string[];
     };
+    const requiredParams = params.required ?? [];
     const paramList = params.properties
-      ? Object.entries(params.properties).map(([k, v]) => `${k}: ${v.type ?? "string"}`).join(", ")
+      ? Object.entries(params.properties).map(([k, v]) => {
+          const req = requiredParams.includes(k) ? " (required)" : "";
+          return `    ${k}: ${v.type ?? "string"}${req} — ${v.description ?? ""}`;
+        }).join("\n")
       : "";
-    return `- **${t.name}**(${paramList}): ${t.description}`;
-  }).join("\n");
+    return `**${t.name}**: ${t.description}\n${paramList}`;
+  }).join("\n\n");
 
   return `## How to Call Tools
 
-**YOU MUST USE THIS EXACT FORMAT to call tools. Do NOT use any other format.**
+You have access to tools. Follow this pattern for EVERY action:
+
+1. THINK: What do I need to do next to accomplish the user's request?
+2. ACT: Call exactly ONE tool using the format below.
+3. STOP: End your message. Wait for the tool result.
+4. OBSERVE: Read the result you receive, then go back to step 1.
+
+**Tool call format** — you MUST use this exact format:
 
 <tool_call>
 {"name": "TOOL_NAME", "arguments": {"param": "value"}}
 </tool_call>
 
-This is the ONLY way to call tools. Do NOT put tool calls in code blocks. Do NOT write JSON without the <tool_call> tags.
+CRITICAL RULES:
+- Call ONE tool at a time, then STOP and wait for the result
+- Always wrap tool calls in <tool_call> and </tool_call> tags
+- JSON must have "name" (string) and "arguments" (object) fields
+- Do NOT put tool calls inside code blocks or any other format
+- Do NOT invent or guess tool results — always wait for actual output
+- All file paths are relative to the workspace root (never use absolute paths)
 
 ## Available Tools
 
@@ -39,41 +56,47 @@ ${toolRef}
 
 ## Examples
 
-User: "Read src/index.ts"
+Reading a file, then acting on the result:
 
 <tool_call>
 {"name": "file_read", "arguments": {"file_path": "src/index.ts"}}
 </tool_call>
 
-User: "Create a hello.py file"
+After receiving the file contents, you would analyze them and decide the next action.
+
+Finding files first, then reading:
+
+<tool_call>
+{"name": "glob", "arguments": {"pattern": "src/**/*.ts"}}
+</tool_call>
+
+After seeing the file list, pick the relevant file and read it:
+
+<tool_call>
+{"name": "file_read", "arguments": {"file_path": "src/config.ts"}}
+</tool_call>
+
+Writing a new file:
 
 <tool_call>
 {"name": "file_write", "arguments": {"file_path": "hello.py", "content": "print('hello world')\\n"}}
 </tool_call>
 
-User: "Run the tests"
+Running a command:
 
 <tool_call>
 {"name": "bash", "arguments": {"command": "npm test"}}
 </tool_call>
 
-User: "Find all Python files"
-
-<tool_call>
-{"name": "glob", "arguments": {"pattern": "**/*.py"}}
-</tool_call>
-
-User: "Search for the login function"
+Searching for code:
 
 <tool_call>
 {"name": "grep", "arguments": {"pattern": "function login", "path": "src"}}
 </tool_call>
 
-## Rules
-- Always wrap tool calls in <tool_call> and </tool_call> tags
-- JSON must have "name" (string) and "arguments" (object) fields
-- After calling tools, STOP and wait for results
-- Never fabricate tool results — wait for the actual output`;
+## When You're Done
+
+Once the user's request is fully complete, respond with a clear summary of what was done. Do NOT call any more tools.`;
 }
 
 /**
@@ -172,6 +195,7 @@ export function parseFallbackToolCalls(response: string): ParsedFallbackResponse
  */
 export function buildFallbackToolResultMessage(
   results: Array<{ toolName: string; result: string; isError: boolean }>,
+  taskContext?: string,
 ): string {
   let content = "Tool results:\n\n";
 
@@ -181,8 +205,12 @@ export function buildFallbackToolResultMessage(
     content += "\n</tool_result>\n\n";
   }
 
+  if (taskContext) {
+    content += `REMINDER — The user's original request: "${taskContext}"\n\n`;
+  }
+
   content +=
-    "Continue based on these results. If you need to call more tools, use <tool_call> blocks. Otherwise, respond to the user.";
+    "Based on these results, decide your next action. If the task is not yet complete, call the next tool using <tool_call> tags. If the task is complete, respond to the user with a summary of what was done.";
 
   return content;
 }

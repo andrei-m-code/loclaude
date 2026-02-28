@@ -7,7 +7,7 @@ export const DEFAULT_CONFIG: Config = {
     model: "qwen3:8b",
     temperature: 0.1,
     maxTokens: 4096,
-    contextWindow: 8192,
+    contextWindow: 32768,
   },
   tools: {
     enabled: [],

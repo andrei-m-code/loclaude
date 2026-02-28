@@ -2,9 +2,9 @@ import type { Message, MessageContent, ToolCallContent, ToolResultContent } from
 
 export interface ConversationOptions {
   systemPrompt: string;
-  /** Max chars for conversation context (default: 24000 ~= 6K tokens). */
+  /** Max chars for conversation context (default: 80000 ~= 20K tokens). */
   maxContextChars?: number;
-  /** Max chars per tool result before truncation (default: 1500). */
+  /** Max chars per tool result before truncation (default: 8000). */
   maxToolResultLength?: number;
 }
 
@@ -16,8 +16,8 @@ export class ConversationManager {
 
   constructor(options: ConversationOptions) {
     this.systemPrompt = options.systemPrompt;
-    this.maxContextChars = options.maxContextChars ?? 24_000;
-    this.maxToolResultLength = options.maxToolResultLength ?? 1500;
+    this.maxContextChars = options.maxContextChars ?? 80_000;
+    this.maxToolResultLength = options.maxToolResultLength ?? 8000;
   }
 
   addUserMessage(content: string): void {
