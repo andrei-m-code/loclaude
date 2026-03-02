@@ -152,7 +152,7 @@ export function validateCommand(command: string, workspaceRoot: string): string 
 export class BashTool extends BaseTool<BashInput> {
   readonly name = "bash";
   readonly description =
-    "Execute a shell command and return its output. Use this for running programs, installing packages, searching code, and any system operations.";
+    "Execute a shell command. Use for: running builds/tests, installing packages, git operations, and system commands. Do NOT use bash for tasks that have a dedicated tool — use file_read (not cat), file_write (not echo >), file_edit (not sed), glob (not find), grep (not grep/rg), file_delete (not rm for single files). Common patterns: `rm -rf dir/` to remove non-empty directories, `mkdir -p a/b/c` to create nested dirs, `cp -r src/ dest/` to copy recursively.";
   readonly inputSchema = inputSchema;
 
   private workspaceRoot: string;
