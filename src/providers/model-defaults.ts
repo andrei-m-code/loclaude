@@ -62,6 +62,12 @@ const MODEL_TABLE: Array<{ pattern: string; defaults: ModelDefaults }> = [
 
   // Command-R
   { pattern: "command-r", defaults: { numCtx: 32768, maxToolResultLength: 8000, temperature: 0.1 } },
+
+  // Anthropic Claude models — large context windows, excellent tool calling
+  { pattern: "claude-opus", defaults: { numCtx: 200000, maxToolResultLength: 16000, temperature: 0.1 } },
+  { pattern: "claude-sonnet", defaults: { numCtx: 200000, maxToolResultLength: 16000, temperature: 0.1 } },
+  { pattern: "claude-haiku", defaults: { numCtx: 200000, maxToolResultLength: 16000, temperature: 0.1 } },
+  { pattern: "claude-3", defaults: { numCtx: 200000, maxToolResultLength: 16000, temperature: 0.1 } },
 ];
 
 /**

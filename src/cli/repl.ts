@@ -8,7 +8,7 @@ import { createProvider } from "../providers/factory.js";
 import { saveSession, type SessionConfig } from "../config/session.js";
 import type { SelectorItem } from "./selector.js";
 
-const SUPPORTED_PROVIDERS = ["ollama", "openai"];
+const SUPPORTED_PROVIDERS = ["ollama", "openai", "anthropic"];
 
 interface ReplOptions {
   agent: Agent;
@@ -253,7 +253,7 @@ async function runOnboarding(
   const providerItems: SelectorItem[] = SUPPORTED_PROVIDERS.map((p) => ({
     id: p,
     label: p,
-    detail: p === "ollama" ? "Local models" : "OpenAI API",
+    detail: p === "ollama" ? "Local models" : p === "openai" ? "OpenAI API" : "Anthropic Claude API",
     isActive: p === (session.provider ?? "ollama"),
   }));
 
@@ -315,6 +315,29 @@ async function runOnboarding(
 
     // Pick model
     const modelName = await pickModel(provider, "gpt-4o-mini", ui);
+    if (modelName) {
+      session.model = modelName;
+      agent.setModel(modelName);
+    }
+  } else if (providerName === "anthropic") {
+    apiKey = session.apiKeys?.anthropic;
+    if (!apiKey) {
+      apiKey = await ui.prompt("Enter Anthropic API key:", { secret: true });
+    }
+    if (!apiKey) {
+      ui.writeLine(chalk.yellow("No API key provided. You can set it later with /provider anthropic."));
+      return;
+    }
+
+    session.apiKeys = { ...session.apiKeys, anthropic: apiKey };
+    baseUrl = "https://api.anthropic.com";
+    session.baseUrl = baseUrl;
+
+    const provider = createProvider({ provider: "anthropic", apiKey, baseUrl, maxRetries: session.maxRetries });
+    agent.setProvider(provider, baseUrl);
+
+    // Pick model
+    const modelName = await pickModel(provider, "claude-sonnet-4-20250514", ui);
     if (modelName) {
       session.model = modelName;
       agent.setModel(modelName);
@@ -400,7 +423,7 @@ async function handleProviderCommand(
     const items: SelectorItem[] = SUPPORTED_PROVIDERS.map((p) => ({
       id: p,
       label: p,
-      detail: p === "ollama" ? "Local models" : "OpenAI API",
+      detail: p === "ollama" ? "Local models" : p === "openai" ? "OpenAI API" : "Anthropic Claude API",
       isActive: p === (session.provider ?? "ollama"),
     }));
 
@@ -447,6 +470,17 @@ async function switchProvider(
       session.apiKeys = { ...session.apiKeys, openai: apiKey };
     }
     baseUrl = "https://api.openai.com";
+  } else if (providerName === "anthropic") {
+    apiKey = session.apiKeys?.anthropic;
+    if (!apiKey) {
+      apiKey = await ui.prompt("Enter Anthropic API key:", { secret: true });
+      if (!apiKey) {
+        ui.writeLine(chalk.yellow("No API key provided. Provider not switched."));
+        return;
+      }
+      session.apiKeys = { ...session.apiKeys, anthropic: apiKey };
+    }
+    baseUrl = "https://api.anthropic.com";
   } else {
     baseUrl = session.baseUrl ?? "http://localhost:11434";
   }

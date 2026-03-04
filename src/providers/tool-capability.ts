@@ -35,6 +35,13 @@ const NATIVE_TOOL_SUPPORT: Record<string, boolean> = {
   "gpt-4o": true,
   "gpt-3.5": true,
   "chatgpt": true,
+  // Anthropic models — all support native tool calling
+  "claude-opus": true,
+  "claude-sonnet": true,
+  "claude-haiku": true,
+  "claude-3": true,
+  "claude-3.5": true,
+  "claude-4": true,
 };
 
 export enum ToolCallMode {

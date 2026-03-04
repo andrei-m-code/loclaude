@@ -1,6 +1,7 @@
 import type { LLMProvider } from "./types.js";
 import { OllamaProvider } from "./ollama.js";
 import { OpenAIProvider } from "./openai.js";
+import { AnthropicProvider } from "./anthropic.js";
 
 export interface ProviderConfig {
   provider: string;
@@ -24,7 +25,14 @@ export function createProvider(config: ProviderConfig): LLMProvider {
         defaultModel: config.defaultModel ?? "gpt-4o-mini",
         maxRetries: config.maxRetries,
       });
+    case "anthropic":
+      return new AnthropicProvider({
+        apiKey: config.apiKey ?? "",
+        baseUrl: config.baseUrl ?? "https://api.anthropic.com",
+        defaultModel: config.defaultModel ?? "claude-sonnet-4-20250514",
+        maxRetries: config.maxRetries,
+      });
     default:
-      throw new Error(`Unknown provider: ${config.provider}. Supported: ollama, openai`);
+      throw new Error(`Unknown provider: ${config.provider}. Supported: ollama, openai, anthropic`);
   }
 }
