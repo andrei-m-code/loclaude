@@ -25,6 +25,7 @@ const NATIVE_TOOL_SUPPORT: Record<string, boolean> = {
   "gemma": false,
   "gemma2": false,
   "gemma3": false,
+  "gemma4": true,
   "deepseek-coder": false,
   "deepseek-coder-v2": false,
   "deepseek-r1": false,
@@ -62,7 +63,15 @@ async function checkModelMetadata(baseUrl: string, model: string): Promise<boole
       body: JSON.stringify({ name: model }),
     });
     if (!resp.ok) return null;
-    const info = (await resp.json()) as { template?: string };
+    const info = (await resp.json()) as {
+      template?: string;
+      capabilities?: string[];
+    };
+
+    // Check capabilities array (newer Ollama models expose this)
+    if (Array.isArray(info.capabilities) && info.capabilities.includes("tools")) {
+      return true;
+    }
 
     const template = info.template ?? "";
     const hasToolTokens =

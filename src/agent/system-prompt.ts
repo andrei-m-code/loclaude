@@ -179,9 +179,9 @@ Do NOT retry the same command. Instead:
 }
 
 /**
- * Build the planning-phase system prompt.
+ * Build the planning-phase system prompt (fallback models only).
  * Used for the initial tool-free call where the model either answers directly
- * or produces a numbered plan. No tools are provided — text only.
+ * or produces a numbered plan.
  */
 export function buildPlanningPrompt(options: PlanningPromptOptions): string {
   const toolList = options.tools.map(t => `- ${t.name}: ${t.description}`).join("\n");
@@ -193,7 +193,6 @@ export function buildPlanningPrompt(options: PlanningPromptOptions): string {
 ## Workspace
 ${options.workingDirectory}`);
 
-  // Include workspace context so the model knows the project structure
   if (options.workspaceContext) {
     sections.push(`## Project Structure
 ${options.workspaceContext}`);
@@ -207,53 +206,22 @@ The user will give you a task. You have two options:
 
 **Option A — Simple question/greeting**: Just answer directly. No plan needed.
 
-**Option B — Task requiring tools** (file operations, commands, code changes): Output a brief numbered plan FIRST. Do NOT execute anything yet — just plan.
+**Option B — Task requiring tools** (file operations, commands, code changes): Output a brief numbered plan. Do NOT execute anything yet — just plan.
 
 Plan format:
 1. Step description [tool_name]
 2. Step description [tool_name]
 ...
 
-Be specific: include file paths, command strings, what you'll look for. Keep it under 10 steps.
+Keep it under 10 steps. Be specific with file paths and search patterns.
 
-## CRITICAL: Always Search Before Modifying
-
-When the user asks you to modify code, fix bugs, or add features — you MUST search for the right files first. NEVER guess file paths. NEVER assume file contents.
-
-**For code modification tasks, your plan MUST start with search steps:**
-1. Use glob to find files matching the relevant patterns (e.g., \`**/*.ts\`, \`**/auth*\`, \`src/**/*.py\`)
-2. Use grep to search for the specific function, class, variable, or pattern mentioned by the user
-3. Use file_read to read the files you found — understand the existing code before changing it
-4. THEN plan your actual edits based on what you found
-
-**Example — user asks "fix the login bug":**
-1. Search for login-related files with glob: \`**/*login*\`, \`**/*auth*\` [glob]
-2. Search for login function/handler with grep: \`login\`, \`authenticate\` [grep]
-3. Read the relevant source files found above [file_read]
-4. Edit the login handler to fix the bug [file_edit]
-
-**Example — user asks "add a dark mode toggle":**
-1. Search for UI/theme files with glob: \`**/*theme*\`, \`**/*.css\`, \`src/components/**\` [glob]
-2. Search for existing theme/color references with grep [grep]
-3. Read the main layout and theme files [file_read]
-4. Edit theme configuration to add dark mode [file_edit]
-5. Edit the layout component to add the toggle [file_edit]
-
-**Example — user asks "update the project to .NET 10":**
-1. Find project files with glob: \`**/*.csproj\` [glob]
-2. Read the project file [file_read]
-3. Edit the TargetFramework to net10.0 [file_edit]
-4. Build to check for errors: \`dotnet build\` [bash]
-
-## Planning Guidelines
-- ALWAYS search first: use glob and grep to find the right files before editing
-- Use the project structure above to pick search patterns — reference actual directories you can see
-- One logical action per step — be specific with file paths and search patterns
-- Read files before editing — understand existing code, style, and structure
-- Do NOT add a verification/run step at the end — verification is handled automatically
-- **NEVER run applications** (\`dotnet run\`, \`node app.js\`, \`python main.py\`, \`./app\`, etc.) to "test" or "verify" changes. Running an app can block forever waiting for input or start a server that never exits. Build commands (\`dotnet build\`, \`npm run build\`, \`go build\`, \`cargo build\`) are fine — they exit on their own.
-- Use the right tool: glob to find files, grep to search content, file_read to examine, file_edit for targeted changes, file_write to create new files, bash for commands
-- **NEVER use \`cd\` to switch directories.** All tools accept paths relative to workspace root (e.g., \`subdir/file.txt\`). For bash, use the \`working_directory\` parameter to run commands in subdirectories.`);
+## Guidelines
+- ALWAYS search first: use glob/grep to find files before editing
+- Read files before editing — understand existing code first
+- Use the right tool for the job
+- **NEVER run applications** (\`dotnet run\`, \`node app.js\`, etc.) — they can block forever. Build commands are fine.
+- **NEVER use \`cd\`** — use relative paths from workspace root.`);
 
   return sections.join("\n\n");
 }
+

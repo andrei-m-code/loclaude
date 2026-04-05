@@ -9,7 +9,7 @@ import {
 } from "../providers/tool-fallback.js";
 import { buildPlanningPrompt } from "./system-prompt.js";
 
-// -- Plan Types --
+// -- Plan Types (used by fallback models) --
 
 export interface PlanStep {
   number: number;
@@ -108,7 +108,24 @@ export class Agent {
     this.conversation.addUserMessage(userMessage);
     const isFallback = this.toolCallMode === ToolCallMode.FALLBACK;
 
-    // Phase 1: PLAN — call LLM without tools, get plan or direct answer
+    if (isFallback) {
+      // Fallback models lack native tool calling and benefit from structured
+      // plan → execute flow to stay on track for complex tasks.
+      yield* this.runWithPlan(userMessage);
+    } else {
+      // Native tool-calling models go straight to the tool loop — the model
+      // decides when to use tools, no forced planning overhead.
+      yield* this.runToolLoop(false);
+    }
+  }
+
+  /**
+   * Plan → execute flow for fallback models.
+   * Phase 1: LLM call without tools to get a plan or direct answer.
+   * Phase 2: Execute each plan step with tools.
+   * No forced verify/summary phase — the model's last tool-loop response is enough.
+   */
+  private async *runWithPlan(userMessage: string): AsyncIterable<AgentEvent> {
     const planningPrompt = buildPlanningPrompt({
       tools: this.toolRegistry.getToolDefinitions(),
       workingDirectory: this.config.workingDirectory,
@@ -120,7 +137,6 @@ export class Agent {
       model: this.config.model,
       messages: this.conversation.buildMessageList(),
       systemPrompt: planningPrompt,
-      // NO tools — forces text-only planning output
       temperature: this.config.temperature ?? 0.1,
       maxTokens: this.config.maxTokens,
       contextWindow: this.config.contextWindow,
@@ -137,83 +153,62 @@ export class Agent {
     }
 
     // Fallback models may skip the plan and emit <tool_call> tags directly.
-    // Detect this and handle it: parse the tool calls, execute them, and
-    // continue with the normal tool loop instead of plan→execute→verify.
-    if (isFallback) {
-      const parsed = parseFallbackToolCalls(planText);
-      if (parsed.toolCalls.length > 0) {
-        yield { type: "text_done", fullText: parsed.text };
+    const parsed = parseFallbackToolCalls(planText);
+    if (parsed.toolCalls.length > 0) {
+      yield { type: "text_done", fullText: parsed.text };
+      this.conversation.addAssistantMessage(parsed.text, parsed.toolCalls);
 
-        // Add assistant message with tool calls to conversation
-        this.conversation.addAssistantMessage(parsed.text, parsed.toolCalls);
-
-        for (const err of parsed.errors) {
-          yield { type: "warning", message: err };
-        }
-
-        // Execute the tool calls
-        const toolResults: Array<{ toolName: string; result: string; isError: boolean }> = [];
-        for (const tc of parsed.toolCalls) {
-          yield { type: "tool_call_ready", toolName: tc.toolName, toolCallId: tc.toolCallId, args: tc.arguments };
-          const { result, isError } = await this.executeTool(tc);
-          yield { type: "tool_result", toolCallId: tc.toolCallId, toolName: tc.toolName, result, isError };
-          toolResults.push({ toolName: tc.toolName, result, isError });
-        }
-
-        // Track tool calls in history
-        for (const tr of toolResults) {
-          this.toolHistory.push({
-            tool: tr.toolName,
-            summary: tr.isError ? `ERROR: ${tr.result.slice(0, 80)}` : `OK (${tr.result.length} chars)`,
-            isError: tr.isError,
-          });
-        }
-
-        // Add results as user message (fallback mode uses role:user for results)
-        const resultContent = buildFallbackToolResultMessage(toolResults, this.currentUserRequest);
-        this.conversation.addUserMessage(resultContent);
-
-        // Continue with tool loop for follow-up
-        yield* this.runToolLoop(isFallback);
-        yield { type: "loop_complete", totalTurns: 1 };
-        return;
+      for (const err of parsed.errors) {
+        yield { type: "warning", message: err };
       }
+
+      const toolResults: Array<{ toolName: string; result: string; isError: boolean }> = [];
+      for (const tc of parsed.toolCalls) {
+        yield { type: "tool_call_ready", toolName: tc.toolName, toolCallId: tc.toolCallId, args: tc.arguments };
+        const { result, isError } = await this.executeTool(tc);
+        yield { type: "tool_result", toolCallId: tc.toolCallId, toolName: tc.toolName, result, isError };
+        toolResults.push({ toolName: tc.toolName, result, isError });
+      }
+
+      for (const tr of toolResults) {
+        this.toolHistory.push({
+          tool: tr.toolName,
+          summary: tr.isError ? `ERROR: ${tr.result.slice(0, 80)}` : `OK (${tr.result.length} chars)`,
+          isError: tr.isError,
+        });
+      }
+
+      const resultContent = buildFallbackToolResultMessage(toolResults, this.currentUserRequest);
+      this.conversation.addUserMessage(resultContent);
+
+      yield* this.runToolLoop(true);
+      yield { type: "loop_complete", totalTurns: 1 };
+      return;
     }
 
     yield { type: "text_done", fullText: planText };
     this.conversation.addAssistantMessage(planText);
 
-    // Parse plan steps from the model's response
     const steps = parsePlanSteps(planText);
 
     if (steps.length === 0) {
-      // Model answered directly — no plan needed, we're done
       yield { type: "loop_complete", totalTurns: 1 };
       return;
     }
 
     yield { type: "plan_ready", steps };
 
-    // Phase 2: EXECUTE — run each step with tools
     for (let i = 0; i < steps.length; i++) {
       const step = steps[i];
       yield { type: "step_start", stepNumber: i + 1, totalSteps: steps.length, description: step.description };
 
       this.conversation.addUserMessage(`Execute step ${i + 1}: ${step.description}`);
-      yield* this.runToolLoop(isFallback, 5); // max 5 turns per step
+      yield* this.runToolLoop(true, 5);
 
       yield { type: "step_end", stepNumber: i + 1, success: true };
     }
 
-    // Phase 3: VERIFY — text-only summary (no tools, just reflect on what was done)
-    yield { type: "step_start", stepNumber: steps.length + 1, totalSteps: steps.length + 1, description: "Summary" };
-    this.conversation.addUserMessage(
-      `All steps complete. Briefly summarize what was done to accomplish "${userMessage}". Do NOT call any tools — just summarize based on the results above.`
-    );
-    yield* this.runToolLoop(isFallback, 1); // single turn, text-only summary
-    yield { type: "step_end", stepNumber: steps.length + 1, success: true };
-
-    yield { type: "loop_complete", totalTurns: steps.length + 2 };
+    yield { type: "loop_complete", totalTurns: steps.length + 1 };
   }
 
   setProvider(provider: LLMProvider, baseUrl: string): void {
@@ -567,13 +562,13 @@ export class Agent {
   }
 }
 
-// -- Plan Step Parser --
+// -- Plan Step Parser (used by fallback models) --
 
 /**
  * Parse numbered plan steps from the model's text response.
  * Matches lines like "1. Some description [tool_name]" or "1. Some description".
  */
-export function parsePlanSteps(text: string): PlanStep[] {
+function parsePlanSteps(text: string): PlanStep[] {
   const steps: PlanStep[] = [];
   const stepRegex = /^\s*(\d+)\.\s+(.+?)(?:\s*\[(\w+)\])?\s*$/gm;
   let match: RegExpExecArray | null;
@@ -586,11 +581,9 @@ export function parsePlanSteps(text: string): PlanStep[] {
     });
   }
 
-  // Only return steps if we found 2+ (a single step = model is just using a list)
-  // Exception: if the single step has a tool hint, it's a real plan
   if (steps.length === 1 && steps[0].tool === "none") {
     return [];
   }
 
-  return steps.slice(0, 10); // cap at 10 steps
+  return steps.slice(0, 10);
 }

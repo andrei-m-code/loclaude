@@ -128,13 +128,19 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             break;
 
           case "tool_call_start":
+            // Model started generating tool call args — show animation
+            if (!firstTextChunk) {
+              ui.writeLine(""); // newline after streamed text
+              firstTextChunk = true;
+            }
+            ui.startInlineSpinner(requestStart);
             break;
 
           case "tool_call_args_delta":
             break;
 
           case "tool_call_ready":
-            // Show tool call in output
+            // Show tool call in output, then animate while tool executes
             ui.stopInlineSpinner();
             if (!firstTextChunk) {
               ui.writeLine(""); // newline after streamed text
@@ -142,9 +148,11 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             firstTextChunk = true; // reset for next text chunk
             renderer.renderToolCall(event.toolName, event.args);
             ui.startSpinner(`Running ${event.toolName}...`);
+            ui.startInlineSpinner(requestStart);
             break;
 
           case "tool_result":
+            ui.stopInlineSpinner();
             ui.stopSpinner();
             renderer.renderToolResult(event.toolName, event.result, event.isError);
             ui.startSpinner("Thinking...");
@@ -168,15 +176,16 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             break;
 
           case "loop_complete":
-            // Restart spinner — more phases may follow (e.g. verify after execute).
-            // The post-loop cleanup below will stop it for good when the agent finishes.
-            ui.startSpinner("Thinking...");
-            firstTextChunk = true;
-            ui.startInlineSpinner(requestStart);
             break;
 
           case "plan_ready":
+            ui.stopInlineSpinner();
+            if (!firstTextChunk) {
+              ui.writeLine("");
+              firstTextChunk = true;
+            }
             renderer.renderPlan(event.steps);
+            ui.startInlineSpinner(requestStart);
             break;
 
           case "step_start":
@@ -193,7 +202,6 @@ export async function startRepl(options: ReplOptions): Promise<never> {
             ui.stopSpinner();
             if (!firstTextChunk) ui.writeLine("");
             renderer.renderStepEnd(event.stepNumber, event.success);
-            // Restart spinner — next step or verify phase may follow
             ui.startSpinner("Thinking...");
             firstTextChunk = true;
             ui.startInlineSpinner(requestStart);
