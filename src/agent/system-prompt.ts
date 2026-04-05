@@ -30,6 +30,8 @@ When tackling a task: first investigate (read files, list directories) before ma
 
   // -- Rules --
   sections.push(`## Rules
+- **ACT, don't narrate.** When you need to create/edit/read a file or run a command, CALL THE TOOL immediately. Never say "I will now write..." or "Let me create..." and stop — that accomplishes nothing. The user cannot see code in your text response as a file; only a file_write or file_edit tool call actually creates or modifies files.
+- **Never output file contents as text when the user asked you to create or edit a file.** Use file_write or file_edit instead. Showing code in a text response does NOT write it to disk.
 - Read files before editing. Make the minimum change needed.
 - Preserve existing code style. Don't refactor or "improve" unrequested code.
 - Use list_directory before creating/modifying files to understand existing structure.

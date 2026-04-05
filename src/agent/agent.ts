@@ -355,8 +355,17 @@ export class Agent {
         }
       }
 
-      // No tool calls -> done
+      // No tool calls — check if the model narrated an action instead of doing it
       if (allToolCalls.length === 0) {
+        if (turn < maxTurns && this.looksLikeStuckNarration(cleanText)) {
+          // Model said "I will write..." but didn't call a tool — nudge it
+          this.conversation.addAssistantMessage(cleanText);
+          this.conversation.addUserMessage(
+            "You described what you would do but did not call any tools. Do NOT repeat the file contents as text — call the appropriate tool (file_write, file_edit, bash, etc.) to actually perform the action NOW."
+          );
+          yield { type: "warning", message: "Model narrated instead of acting — nudging to use tools" };
+          continue;
+        }
         this.conversation.addAssistantMessage(cleanText);
         yield { type: "loop_complete", totalTurns: turn };
         return;
@@ -543,6 +552,52 @@ export class Agent {
     }
 
     return result + "\n\nThe command failed. Read the error output above carefully. Do NOT retry the same command — try a different approach.";
+  }
+
+  /**
+   * Detect when the model narrated a tool action in text instead of actually
+   * calling the tool — e.g. "I will now write this file" followed by a code
+   * block but no file_write call.
+   */
+  private looksLikeStuckNarration(text: string): boolean {
+    if (!text || text.length < 20) return false;
+    const lower = text.toLowerCase();
+
+    // Phrases that signal the model intended to call a tool
+    const intentPhrases = [
+      "i will now write",
+      "i will now create",
+      "i will write",
+      "i'll write",
+      "i'll create",
+      "let me write",
+      "let me create",
+      "i will now save",
+      "let me save",
+      "i will now edit",
+      "let me edit",
+      "i will now run",
+      "let me run",
+      "i will now execute",
+      "let me execute",
+      "now i'll write",
+      "now i'll create",
+      "writing this to",
+      "saving this to",
+      "creating the file",
+      "here is the file",
+      "here's the file",
+      "here is the code",
+      "here's the code",
+    ];
+
+    const hasIntent = intentPhrases.some(p => lower.includes(p));
+    // Also catch responses that contain a large code block (likely file content the model
+    // should have written via tool) combined with a mention of a file path
+    const hasCodeBlock = text.includes("```");
+    const mentionsPath = /\b[\w\-]+\.\w{1,5}\b/.test(text); // e.g. "Program.cs", "index.ts"
+
+    return hasIntent || (hasCodeBlock && mentionsPath);
   }
 
   private buildContextBlock(): string {
